@@ -6,6 +6,7 @@ import {
   addDoc,
   collection,
   doc,
+  deleteDoc,
   getDoc,
   getDocs,
   limit,
@@ -37,6 +38,11 @@ const VIEW = {
 const DASHBOARD_PAGE = {
   HOME: "home",
   DEPARTMENT: "department",
+  CALENDAR: "calendar",
+  FAQ: "faq",
+  PROFILE: "profile",
+  STARRED: "starred",
+  REMINDERS: "reminders",
 };
 
 const FEED_TAB = {
@@ -51,35 +57,35 @@ const BOARDS = [
     name: "Computer Science Engineering",
     shortName: "CSE",
     thumbnail:
-      "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1000&q=80",
+      "https://images.unsplash.com/photo-1515879218367-8466d910aaa4?auto=format&fit=crop&w=1200&q=80",
   },
   {
     id: "cse-aiml",
     name: "CSE (AI & ML)",
     shortName: "CSE-AIML",
     thumbnail:
-      "https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=1000&q=80",
+      "https://images.unsplash.com/photo-1555949963-aa79dcee981c?auto=format&fit=crop&w=1200&q=80",
   },
   {
     id: "ece",
     name: "Electronics & Communication",
     shortName: "ECE",
     thumbnail:
-      "https://images.unsplash.com/photo-1516116216624-53e697fedbea?auto=format&fit=crop&w=1000&q=80",
+      "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80",
   },
   {
     id: "eee",
     name: "Electrical & Electronics",
     shortName: "EEE",
     thumbnail:
-      "https://images.unsplash.com/photo-1544723795-3fb6469f5b39?auto=format&fit=crop&w=1000&q=80",
+      "https://images.unsplash.com/photo-1509395176047-4a66953fd231?auto=format&fit=crop&w=1200&q=80",
   },
   {
     id: "it",
     name: "Information Technology",
     shortName: "IT",
     thumbnail:
-      "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1000&q=80",
+      "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1200&q=80",
   },
 ];
 
@@ -99,8 +105,18 @@ const PRIORITY_RANK = {
 const POST_TYPES = ["notice", "event", "hackathon", "workshop", "announcement"];
 const PRIORITY_OPTIONS = ["high", "medium", "low"];
 const MAX_UPLOAD_BYTES = 7 * 1024 * 1024;
-const UPLOAD_TIMEOUT_MS = 45000;
-const PUBLISH_TIMEOUT_MS = 30000;
+const UPLOAD_IDLE_TIMEOUT_MS = 90000;
+const UPLOAD_MAX_TIMEOUT_MS = 300000;
+const PUBLISH_TIMEOUT_MS = 90000;
+const FAQ_RECIPIENTS = [
+  "Admin",
+  "CSE Faculty",
+  "CSE-AIML Faculty",
+  "ECE Faculty",
+  "EEE Faculty",
+  "IT Faculty",
+];
+const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function parseEmailIdentity(email) {
   const localPart = (email || "").split("@")[0]?.toLowerCase() || "";
@@ -124,6 +140,14 @@ function parseEmailIdentity(email) {
 
 function toStatusMessage(error, fallback) {
   const code = error?.code || "";
+  const message = String(error?.message || "").toLowerCase();
+
+  if (message.includes("image upload timed out")) {
+    return "Image upload timed out. Try a smaller image or a stronger connection.";
+  }
+  if (message.includes("publishing timed out")) {
+    return "Publishing timed out. Please retry once your connection is stable.";
+  }
   if (code === "permission-denied") {
     return "You are signed in, but Firestore permissions are denying access.";
   }
@@ -148,7 +172,7 @@ function toStatusMessage(error, fallback) {
   if (code === "deadline-exceeded") {
     return "Request timed out. Please try again with a smaller image or better network.";
   }
-  if (String(error?.message || "").toLowerCase().includes("timed out")) {
+  if (message.includes("timed out")) {
     return "Request timed out. Please try again with a smaller image or better network.";
   }
   return error?.message || fallback;
@@ -178,6 +202,39 @@ function formatTimestamp(value) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatDateTimeLocal(value) {
+  if (!value) return "";
+  const date = value?.toDate ? value.toDate() : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (input) => String(input).padStart(2, "0");
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function formatDateLabel(date) {
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function getDateKey(date) {
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function getInitials(value) {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return "CC";
+  const parts = cleaned.split(/\s+/).slice(0, 2);
+  return parts.map((part) => part[0]?.toUpperCase() || "").join("") || "CC";
 }
 
 function isVisibleForYear(post, yearValue) {
@@ -214,29 +271,60 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
   ]);
 }
 
-function uploadImageWithProgress(storageRef, file, onProgress, timeoutMs = UPLOAD_TIMEOUT_MS) {
+function uploadImageWithProgress(storageRef, file, onProgress, idleTimeoutMs = UPLOAD_IDLE_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const uploadTask = uploadBytesResumable(storageRef, file);
-    const timeoutId = setTimeout(() => {
+
+    let idleTimerId = null;
+    let maxTimerId = null;
+    let settled = false;
+
+    const clearTimers = () => {
+      if (idleTimerId) clearTimeout(idleTimerId);
+      if (maxTimerId) clearTimeout(maxTimerId);
+    };
+
+    const failUpload = (errorMessage) => {
+      if (settled) return;
+      settled = true;
       uploadTask.cancel();
-      const error = new Error("Image upload timed out");
+      clearTimers();
+      const error = new Error(errorMessage);
       error.code = "deadline-exceeded";
       reject(error);
-    }, timeoutMs);
+    };
+
+    const resetIdleTimer = () => {
+      if (idleTimerId) clearTimeout(idleTimerId);
+      idleTimerId = setTimeout(() => {
+        failUpload("Image upload timed out");
+      }, idleTimeoutMs);
+    };
+
+    maxTimerId = setTimeout(() => {
+      failUpload("Image upload timed out");
+    }, UPLOAD_MAX_TIMEOUT_MS);
+
+    resetIdleTimer();
 
     uploadTask.on(
       "state_changed",
       (snapshot) => {
         if (!snapshot.totalBytes) return;
+        resetIdleTimer();
         const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
         onProgress(progress);
       },
       (error) => {
-        clearTimeout(timeoutId);
+        if (settled) return;
+        settled = true;
+        clearTimers();
         reject(error);
       },
       async () => {
-        clearTimeout(timeoutId);
+        if (settled) return;
+        settled = true;
+        clearTimers();
         try {
           const url = await getDownloadURL(uploadTask.snapshot.ref);
           resolve(url);
@@ -275,13 +363,15 @@ function getMessagingServiceWorkerUrl() {
 }
 
 export default function App() {
-  const [view, setView] = useState(VIEW.WELCOME);
+  const [view, setView] = useState(VIEW.LOGIN);
   const [status, setStatus] = useState("");
   const [isError, setIsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [authUser, setAuthUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
+  const [theme, setTheme] = useState("campus");
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [dashboardPage, setDashboardPage] = useState(DASHBOARD_PAGE.HOME);
   const [selectedBoardId, setSelectedBoardId] = useState(BOARDS[0].id);
   const [activeTab, setActiveTab] = useState(FEED_TAB.FEED);
@@ -301,12 +391,40 @@ export default function App() {
   const [filterYear, setFilterYear] = useState("all");
   const [filterCategory, setFilterCategory] = useState("all");
   const [readStatsByPost, setReadStatsByPost] = useState({});
+  const [lightboxImage, setLightboxImage] = useState("");
+  const [starredPosts, setStarredPosts] = useState([]);
+  const [reminders, setReminders] = useState([]);
+  const [reminderDraft, setReminderDraft] = useState({
+    postId: "",
+    title: "",
+    date: "",
+  });
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [faqDraft, setFaqDraft] = useState({
+    recipient: FAQ_RECIPIENTS[0],
+    question: "",
+    relatedPostId: "",
+  });
+  const [faqItems, setFaqItems] = useState([]);
+  const [calendarCursor, setCalendarCursor] = useState(() => new Date());
+  const [calendarSelectedDate, setCalendarSelectedDate] = useState(null);
+  const [authoredPosts, setAuthoredPosts] = useState([]);
+  const [authoredLoading, setAuthoredLoading] = useState(false);
+  const [editPost, setEditPost] = useState(null);
+  const [editForm, setEditForm] = useState({
+    title: "",
+    content: "",
+    category: "",
+    priority: "medium",
+    deadline: "",
+  });
   const [composeForm, setComposeForm] = useState({
     title: "",
     content: "",
     type: "notice",
-    category: "general",
+    category: "",
     priority: "medium",
+    link: "",
     targetYear: "all",
     deadline: "",
     targetMode: "specific",
@@ -320,6 +438,93 @@ export default function App() {
   const statusClass = useMemo(() => (isError ? "status error" : "status success"), [isError]);
   const canModerate = isModerator(userProfile);
   const canCreateGlobalPost = Boolean(userProfile?.role === "faculty" || userProfile?.role === "admin" || userProfile?.authorApproved === true);
+  const isStudent = userProfile?.role === "student";
+  const canViewAuthorPosts = Boolean(
+    userProfile?.role === "faculty" || userProfile?.role === "admin" || userProfile?.authorApproved === true
+  );
+  const faqLabel = isStudent ? "FAQs" : "Questions";
+  const profileHandle = useMemo(() => {
+    const handle = (email || "").split("@")[0];
+    return handle || userProfile?.name || "Campus member";
+  }, [email, userProfile]);
+
+  const pageTitle = useMemo(() => {
+    switch (dashboardPage) {
+      case DASHBOARD_PAGE.HOME:
+        return "Departments";
+      case DASHBOARD_PAGE.DEPARTMENT:
+        return selectedBoard?.name || "Department Feed";
+      case DASHBOARD_PAGE.CALENDAR:
+        return "Campus Calendar";
+      case DASHBOARD_PAGE.FAQ:
+        return faqLabel;
+      case DASHBOARD_PAGE.PROFILE:
+        return "My Profile";
+      case DASHBOARD_PAGE.STARRED:
+        return "Starred Posts";
+      case DASHBOARD_PAGE.REMINDERS:
+        return "Reminders";
+      default:
+        return "Dashboard";
+    }
+  }, [dashboardPage, selectedBoard, faqLabel]);
+
+  const calendarSourcePosts = useMemo(() => {
+    const items = [...posts, ...completedPosts];
+    if (canModerate) {
+      items.push(...pendingPosts);
+    }
+    return items;
+  }, [posts, completedPosts, pendingPosts, canModerate]);
+
+  const calendarEvents = useMemo(() => {
+    const map = new Map();
+    calendarSourcePosts.forEach((post) => {
+      const rawDate = post.deadlineAt || post.createdAt;
+      if (!rawDate) return;
+      const date = rawDate?.toDate ? rawDate.toDate() : new Date(rawDate);
+      if (Number.isNaN(date.getTime())) return;
+      const key = getDateKey(date);
+      if (!key) return;
+      const entry = {
+        id: post.id,
+        title: post.title || "Untitled",
+        type: post.type || "notice",
+        priority: post.priority || "medium",
+        boardName: post.boardName || selectedBoard?.shortName || "",
+        date,
+        deadlineAt: post.deadlineAt || null,
+      };
+      const bucket = map.get(key) || [];
+      bucket.push(entry);
+      map.set(key, bucket);
+    });
+    return map;
+  }, [calendarSourcePosts, selectedBoard]);
+
+  const calendarDays = useMemo(() => {
+    const year = calendarCursor.getFullYear();
+    const month = calendarCursor.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const offset = firstDay.getDay();
+    const totalCells = Math.ceil((offset + lastDay.getDate()) / 7) * 7;
+    return Array.from({ length: totalCells }, (_, index) => {
+      const dayNumber = index - offset + 1;
+      const date = new Date(year, month, dayNumber);
+      return {
+        date,
+        inMonth: dayNumber >= 1 && dayNumber <= lastDay.getDate(),
+      };
+    });
+  }, [calendarCursor]);
+
+  const selectedCalendarKey = calendarSelectedDate ? getDateKey(calendarSelectedDate) : "";
+  const selectedDayEvents = useMemo(() => {
+    if (!selectedCalendarKey) return [];
+    return calendarEvents.get(selectedCalendarKey) || [];
+  }, [calendarEvents, selectedCalendarKey]);
+  const starredPostIds = useMemo(() => new Set(starredPosts.map((post) => post.id)), [starredPosts]);
 
   const allCategoryValues = useMemo(() => {
     const values = [...posts, ...completedPosts, ...pendingPosts]
@@ -333,8 +538,9 @@ export default function App() {
       title: "",
       content: "",
       type: "notice",
-      category: "general",
+      category: "",
       priority: "medium",
+      link: "",
       targetYear: "all",
       deadline: "",
       targetMode: "specific",
@@ -350,6 +556,102 @@ export default function App() {
     setFilterPriority("all");
     setFilterYear("all");
     setFilterCategory("all");
+  }
+
+  function navigateTo(page) {
+    setDashboardPage(page);
+    setProfileMenuOpen(false);
+  }
+
+  function toggleTheme() {
+    setTheme((prev) => (prev === "campus" ? "sunset" : "campus"));
+  }
+
+  function toggleStar(post) {
+    setStarredPosts((prev) => {
+      const exists = prev.find((item) => item.id === post.id);
+      if (exists) {
+        return prev.filter((item) => item.id !== post.id);
+      }
+      return [
+        {
+          id: post.id,
+          title: post.title || "Untitled",
+          content: post.content || "",
+          type: post.type || "notice",
+          boardName: post.boardName || selectedBoard?.shortName || "",
+          priority: post.priority || "medium",
+          mediaUrls: post.mediaUrls || [],
+          createdAt: post.createdAt || null,
+        },
+        ...prev,
+      ];
+    });
+  }
+
+  function openReminder(post) {
+    setReminderDraft({
+      postId: post.id,
+      title: post.title || "Untitled",
+      date: "",
+    });
+    setReminderOpen(true);
+  }
+
+  function saveReminder() {
+    if (!reminderDraft.postId || !reminderDraft.date) {
+      setIsError(true);
+      setStatus("Select a reminder date.");
+      return;
+    }
+
+    setReminders((prev) => [
+      {
+        id: `${reminderDraft.postId}-${reminderDraft.date}`,
+        postId: reminderDraft.postId,
+        title: reminderDraft.title,
+        remindAt: reminderDraft.date,
+      },
+      ...prev,
+    ]);
+    setReminderOpen(false);
+    setReminderDraft({ postId: "", title: "", date: "" });
+    setIsError(false);
+    setStatus("Reminder saved.");
+  }
+
+  function removeReminder(reminderId) {
+    setReminders((prev) => prev.filter((item) => item.id !== reminderId));
+  }
+
+  function openFaqForPost(post) {
+    setFaqDraft((prev) => ({
+      ...prev,
+      question: `Question about: ${post.title || "this post"}`,
+      relatedPostId: post.id,
+    }));
+    navigateTo(DASHBOARD_PAGE.FAQ);
+  }
+
+  function handleFaqSubmit(event) {
+    event.preventDefault();
+    if (!faqDraft.question.trim()) {
+      setIsError(true);
+      setStatus("Please write your question.");
+      return;
+    }
+    const entry = {
+      id: `${Date.now()}`,
+      question: faqDraft.question.trim(),
+      recipient: faqDraft.recipient,
+      relatedPostId: faqDraft.relatedPostId,
+      createdAt: new Date().toISOString(),
+      status: "Pending",
+    };
+    setFaqItems((prev) => [entry, ...prev]);
+    setFaqDraft((prev) => ({ ...prev, question: "", relatedPostId: "" }));
+    setIsError(false);
+    setStatus("Question sent.");
   }
 
   function applyFilters(list) {
@@ -754,11 +1056,26 @@ export default function App() {
   }, [authUser, userProfile, pushRegistered]);
 
   useEffect(() => {
-    if (view !== VIEW.DASHBOARD || dashboardPage !== DASHBOARD_PAGE.DEPARTMENT || !authUser || !userProfile) {
+    if (view !== VIEW.DASHBOARD || !authUser || !userProfile) {
+      return;
+    }
+    if (dashboardPage !== DASHBOARD_PAGE.DEPARTMENT && dashboardPage !== DASHBOARD_PAGE.CALENDAR) {
       return;
     }
     loadDepartmentData(selectedBoardId, userProfile, authUser);
   }, [view, dashboardPage, selectedBoardId, authUser, userProfile]);
+
+  useEffect(() => {
+    if (dashboardPage === DASHBOARD_PAGE.CALENDAR && !calendarSelectedDate) {
+      setCalendarSelectedDate(new Date());
+    }
+  }, [dashboardPage, calendarSelectedDate]);
+
+  useEffect(() => {
+    if (view !== VIEW.DASHBOARD || dashboardPage !== DASHBOARD_PAGE.PROFILE) return;
+    if (!authUser || !userProfile || !canViewAuthorPosts) return;
+    void loadAuthoredPosts();
+  }, [view, dashboardPage, authUser, userProfile, canViewAuthorPosts]);
 
   async function handleGoogleLogin() {
     setIsError(false);
@@ -797,6 +1114,7 @@ export default function App() {
     const title = composeForm.title.trim();
     const content = composeForm.content.trim();
     const category = composeForm.category.trim().toLowerCase();
+    const linkValue = composeForm.link.trim();
 
     if (!title || !content) {
       setIsError(true);
@@ -839,6 +1157,8 @@ export default function App() {
     const targetBoardIds =
       composeForm.targetMode === "all" ? BOARDS.map((board) => board.id) : [composeForm.targetBoardId];
 
+    const contentWithLink = linkValue ? `${content}\n\nLink: ${linkValue}` : content;
+
     setSubmittingPost(true);
     setUploadProgress(0);
     setIsError(false);
@@ -855,7 +1175,7 @@ export default function App() {
           if (progress < 100) {
             setStatus(`Uploading image... ${progress}%`);
           }
-        }, UPLOAD_TIMEOUT_MS);
+        }, UPLOAD_IDLE_TIMEOUT_MS);
         setStatus("Publishing post...");
       }
 
@@ -868,16 +1188,16 @@ export default function App() {
             boardId,
             boardName: board?.name || boardId,
             type: composeForm.type,
-            category: category || "general",
+            category: category || "",
             title,
-            content,
+            content: contentWithLink,
             mediaUrls: mediaUrl ? [mediaUrl] : [],
             priority: composeForm.priority,
             priorityRank: getPriorityRank(composeForm.priority),
             urgencyScore,
             year: targetYear,
             audienceYears: targetYear ? [targetYear] : [],
-            searchTokens: tokenizeText(`${title} ${content} ${category} ${composeForm.type}`),
+            searchTokens: tokenizeText(`${title} ${contentWithLink} ${category} ${composeForm.type}`),
             deadlineAt: deadlineDate ? Timestamp.fromDate(deadlineDate) : null,
             completedAt: null,
             lifecycleStatus: "active",
@@ -912,6 +1232,106 @@ export default function App() {
       setStatus(toStatusMessage(error, "Unable to create post."));
     } finally {
       setSubmittingPost(false);
+    }
+  }
+
+  function openEditPost(post) {
+    setEditPost(post);
+    setEditForm({
+      title: post.title || "",
+      content: post.content || "",
+      category: post.category || "",
+      priority: post.priority || "medium",
+      deadline: post.deadlineAt ? formatDateTimeLocal(post.deadlineAt) : "",
+    });
+  }
+
+  function closeEditPost() {
+    setEditPost(null);
+    setEditForm({
+      title: "",
+      content: "",
+      category: "",
+      priority: "medium",
+      deadline: "",
+    });
+  }
+
+  async function handleSaveEdit() {
+    if (!editPost) return;
+    const title = editForm.title.trim();
+    const content = editForm.content.trim();
+    const category = editForm.category.trim().toLowerCase();
+
+    if (!title || !content) {
+      setIsError(true);
+      setStatus("Title and content are required.");
+      return;
+    }
+
+    const deadlineDate = editForm.deadline ? new Date(editForm.deadline) : null;
+    if (deadlineDate && Number.isNaN(deadlineDate.getTime())) {
+      setIsError(true);
+      setStatus("Invalid deadline format.");
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, "posts", editPost.id), {
+        title,
+        content,
+        category: category || "",
+        priority: editForm.priority,
+        priorityRank: getPriorityRank(editForm.priority),
+        urgencyScore: computeUrgencyScore(editForm.priority, deadlineDate),
+        deadlineAt: deadlineDate ? Timestamp.fromDate(deadlineDate) : null,
+        searchTokens: tokenizeText(`${title} ${content} ${category} ${editPost.type || ""}`),
+        updatedAt: serverTimestamp(),
+      });
+      setIsError(false);
+      setStatus("Post updated.");
+      closeEditPost();
+      await loadAuthoredPosts();
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to update post."));
+    }
+  }
+
+  async function handleDeletePost(post) {
+    if (!post) return;
+    const ok = window.confirm("Delete this post? This cannot be undone.");
+    if (!ok) return;
+    try {
+      await deleteDoc(doc(db, "posts", post.id));
+      setIsError(false);
+      setStatus("Post deleted.");
+      setAuthoredPosts((prev) => prev.filter((item) => item.id !== post.id));
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to delete post."));
+    }
+  }
+
+  async function loadAuthoredPosts() {
+    if (!authUser || !canViewAuthorPosts) return;
+    setAuthoredLoading(true);
+    try {
+      const authoredQuery = query(
+        collection(db, "posts"),
+        where("authorUid", "==", authUser.uid),
+        orderBy("createdAt", "desc"),
+        limit(80)
+      );
+      const snapshot = await getDocs(authoredQuery);
+      const items = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      setAuthoredPosts(items);
+      await loadReadAnalytics(items);
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to load your posts."));
+    } finally {
+      setAuthoredLoading(false);
     }
   }
 
@@ -956,6 +1376,18 @@ export default function App() {
     setPushRegistered(false);
     clearFilters();
     setComposeOpen(false);
+    setProfileMenuOpen(false);
+    setStarredPosts([]);
+    setReminders([]);
+    setReminderDraft({ postId: "", title: "", date: "" });
+    setReminderOpen(false);
+    setLightboxImage("");
+    setFaqDraft({ recipient: FAQ_RECIPIENTS[0], question: "", relatedPostId: "" });
+    setFaqItems([]);
+    setCalendarSelectedDate(null);
+    setAuthoredPosts([]);
+    setAuthoredLoading(false);
+    setEditPost(null);
     setIsError(false);
     setStatus("Logged out successfully.");
     setView(VIEW.LOGIN);
@@ -967,8 +1399,19 @@ export default function App() {
     setActiveTab(FEED_TAB.FEED);
     clearFilters();
     setDashboardPage(DASHBOARD_PAGE.DEPARTMENT);
+    setProfileMenuOpen(false);
     setStatus("");
     setIsError(false);
+  }
+
+  function handleBoardSelect(event) {
+    const nextBoardId = event.target.value;
+    setSelectedBoardId(nextBoardId);
+    setComposeForm((prev) => ({ ...prev, targetBoardId: nextBoardId }));
+  }
+
+  function shiftCalendar(monthDelta) {
+    setCalendarCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() + monthDelta, 1));
   }
 
   if (loading) {
@@ -982,263 +1425,862 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
-      <div className="aurora" aria-hidden="true" />
-      <div className="aurora aurora-two" aria-hidden="true" />
-
-      {view === VIEW.WELCOME && (
-        <section className="surface-card landing-card minimal-card">
-          <h1 className="hero-title">CampusConnect</h1>
-          <p className="description">
-            A clean social notice network for campus departments. Stay updated with events, workshops,
-            hackathons, and announcements.
-          </p>
-          <button className="primary-btn" onClick={() => setView(VIEW.LOGIN)} type="button">
-            Go to Sign In
-          </button>
-        </section>
-      )}
+    <main className={`app-shell ${theme === "sunset" ? "theme-sunset" : "theme-campus"}`}>
+      <div className="bg-orb orb-one" aria-hidden="true" />
+      <div className="bg-orb orb-two" aria-hidden="true" />
 
       {view === VIEW.LOGIN && (
-        <section className="surface-card auth-card minimal-card" aria-hidden="false">
-          <h2>Sign In</h2>
-          <p className="description">Use your institutional Google account to enter CampusConnect.</p>
-          <button className="primary-btn" onClick={handleGoogleLogin} type="button">
-            Sign in with Google
-          </button>
-          <p className={statusClass} role="status" aria-live="polite">
-            {status}
-          </p>
+        <section className="auth-split" aria-hidden="false">
+          <div className="auth-visual">
+            <div className="auth-text">
+              <p className="eyebrow">CampusConnect</p>
+              <h1 className="hero-title">Your campus, connected in one clear feed.</h1>
+              <p className="description">
+                CampusConnect keeps every department update, event, and deadline in one place so students never miss a chance.
+              </p>
+              <div className="auth-highlights">
+                <div className="highlight-item">Department announcements, verified.</div>
+                <div className="highlight-item">Events, deadlines, and reminders.</div>
+                <div className="highlight-item">Questions answered by faculty.</div>
+              </div>
+            </div>
+            <img
+              src="https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1200&q=80"
+              alt="College student using a laptop"
+              className="auth-illustration"
+            />
+          </div>
+          <div className="auth-panel">
+            <div className="auth-panel-card">
+              <h2>Sign In</h2>
+              <p className="description">Use your institutional Google account to enter CampusConnect.</p>
+              <button className="primary-btn" onClick={handleGoogleLogin} type="button">
+                Sign in with Google
+              </button>
+              <p className="domain-note">Only @{ALLOWED_DOMAIN} accounts are allowed.</p>
+              <p className={statusClass} role="status" aria-live="polite">
+                {status}
+              </p>
+            </div>
+          </div>
         </section>
       )}
 
       {view === VIEW.DASHBOARD && (
-        <section className="surface-card dashboard-shell" aria-hidden="false">
-          <header className="dashboard-header compact-header">
-            <div>
-              <h2>CampusConnect</h2>
-              <p className="description">Welcome, {userProfile?.name || email}</p>
+        <section className="dashboard-shell" aria-hidden="false">
+          <aside className="sidebar">
+            <div className="brand-block">
+              <div className="brand-badge">CC</div>
+              <div>
+                <p className="brand-name">CampusConnect</p>
+                <p className="brand-tag">BVRITH Campus Network</p>
+              </div>
             </div>
-            <button className="ghost-btn compact-btn" onClick={handleLogout} type="button">
-              Log out
+
+            <button
+              className="profile-bar"
+              type="button"
+              onClick={() => setProfileMenuOpen((prev) => !prev)}
+            >
+              <span className="profile-handle">{profileHandle}</span>
+              <span className={`profile-chevron ${profileMenuOpen ? "open" : ""}`} aria-hidden="true">
+                v
+              </span>
+              <span className="avatar small">{getInitials(userProfile?.name || email)}</span>
             </button>
-          </header>
 
-          <section className="profile-brief">
-            <span className="profile-pill">Role: {userProfile?.role || "student"}</span>
-            <span className="profile-pill">
-              Year: {userProfile?.year ? `${userProfile.year}` : "NA"}
-            </span>
-            <span className="profile-pill">Email: {email}</span>
-          </section>
-
-          {dashboardPage === DASHBOARD_PAGE.HOME && (
-            <div className="thumbnail-grid">
-              {BOARDS.map((board) => (
-                <button
-                  key={board.id}
-                  className="thumbnail-card"
-                  onClick={() => openDepartment(board.id)}
-                  type="button"
-                >
-                  <img src={board.thumbnail} alt={board.name} className="thumbnail-img" />
-                  <div className="thumbnail-body">
-                    <p className="thumbnail-chip">{board.shortName}</p>
-                    <h3>{board.name}</h3>
-                    <span className="thumbnail-link">Open Board</span>
-                  </div>
+            {profileMenuOpen && (
+              <div className="profile-menu">
+                <button type="button" onClick={() => navigateTo(DASHBOARD_PAGE.PROFILE)}>
+                  My Profile
                 </button>
-              ))}
-            </div>
-          )}
-
-          {dashboardPage === DASHBOARD_PAGE.DEPARTMENT && (
-            <div className="department-page">
-              <section className="section-head section-head-row">
-                <div>
-                  <h3>{selectedBoard.name}</h3>
-                </div>
-                <button
-                  className="ghost-btn compact-btn"
-                  onClick={() => setDashboardPage(DASHBOARD_PAGE.HOME)}
-                  type="button"
-                >
-                  Back
-                </button>
-              </section>
-
-              <div className="feed-tabs">
-                <button
-                  type="button"
-                  className={activeTab === FEED_TAB.FEED ? "tab-btn active" : "tab-btn"}
-                  onClick={() => setActiveTab(FEED_TAB.FEED)}
-                >
-                  Feed
-                </button>
-                <button
-                  type="button"
-                  className={activeTab === FEED_TAB.COMPLETED ? "tab-btn active" : "tab-btn"}
-                  onClick={() => setActiveTab(FEED_TAB.COMPLETED)}
-                >
-                  Completed
-                </button>
-                {canModerate && (
-                  <button
-                    type="button"
-                    className={activeTab === FEED_TAB.PENDING ? "tab-btn active" : "tab-btn"}
-                    onClick={() => setActiveTab(FEED_TAB.PENDING)}
-                  >
-                    Pending
+                {isStudent && (
+                  <button type="button" onClick={() => navigateTo(DASHBOARD_PAGE.STARRED)}>
+                    Starred
                   </button>
                 )}
+                {isStudent && (
+                  <button type="button" onClick={() => navigateTo(DASHBOARD_PAGE.REMINDERS)}>
+                    Reminders
+                  </button>
+                )}
+                <button type="button" onClick={toggleTheme}>
+                  Switch Background
+                </button>
+                <button type="button" className="danger" onClick={handleLogout}>
+                  Logout
+                </button>
               </div>
+            )}
 
-              <div className="filters-panel">
-                <input
-                  type="text"
-                  placeholder="Search..."
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                />
-                <select value={filterType} onChange={(event) => setFilterType(event.target.value)}>
-                  <option value="all">All Types</option>
-                  {POST_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-                <select value={filterPriority} onChange={(event) => setFilterPriority(event.target.value)}>
-                  <option value="all">All Priority</option>
-                  {PRIORITY_OPTIONS.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {priority}
-                    </option>
-                  ))}
-                </select>
-                <select value={filterYear} onChange={(event) => setFilterYear(event.target.value)}>
-                  <option value="all">All Years</option>
-                  <option value="1">1st Year</option>
-                  <option value="2">2nd Year</option>
-                  <option value="3">3rd Year</option>
-                  <option value="4">4th Year</option>
-                </select>
-                <select value={filterCategory} onChange={(event) => setFilterCategory(event.target.value)}>
-                  <option value="all">All Categories</option>
-                  {allCategoryValues.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
+            <nav className="sidebar-nav">
+              <button
+                type="button"
+                className={`nav-btn ${dashboardPage === DASHBOARD_PAGE.HOME ? "active" : ""}`}
+                onClick={() => navigateTo(DASHBOARD_PAGE.HOME)}
+              >
+                <span className="nav-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-8.5z" />
+                  </svg>
+                </span>
+                Home
+              </button>
+              <button
+                type="button"
+                className={`nav-btn ${dashboardPage === DASHBOARD_PAGE.CALENDAR ? "active" : ""}`}
+                onClick={() => navigateTo(DASHBOARD_PAGE.CALENDAR)}
+              >
+                <span className="nav-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M7 3v3m10-3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z" />
+                  </svg>
+                </span>
+                Calendar
+              </button>
+              <button
+                type="button"
+                className={`nav-btn ${dashboardPage === DASHBOARD_PAGE.FAQ ? "active" : ""}`}
+                onClick={() => navigateTo(DASHBOARD_PAGE.FAQ)}
+              >
+                <span className="nav-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8l-4 4V6a1 1 0 0 1 1-1z" />
+                  </svg>
+                </span>
+                {faqLabel}
+              </button>
+              {canCreateGlobalPost && (
+                <button
+                  type="button"
+                  className="nav-btn nav-create"
+                  onClick={() => {
+                    setComposeOpen(true);
+                    setIsError(false);
+                    setStatus("");
+                  }}
+                >
+                  <span className="nav-icon nav-plus" aria-hidden="true">
+                    +
+                  </span>
+                  New Post
+                </button>
+              )}
+            </nav>
+
+            <div className="sidebar-footer">
+              <span className="sidebar-pill">Role: {userProfile?.role || "student"}</span>
+              <span className="sidebar-pill">Year: {userProfile?.year ? `${userProfile.year}` : "NA"}</span>
+            </div>
+          </aside>
+
+          <div className="main-panel">
+            <header className="main-header">
+              <div>
+                <p className="eyebrow">Welcome, {userProfile?.name || "Campus member"}</p>
+                <h2>{pageTitle}</h2>
+                <p className="description">
+                  {dashboardPage === DASHBOARD_PAGE.HOME &&
+                    "Choose a department to see notices, events, and deadlines."}
+                  {dashboardPage === DASHBOARD_PAGE.DEPARTMENT &&
+                    "Stay updated with verified posts from your department."}
+                  {dashboardPage === DASHBOARD_PAGE.CALENDAR &&
+                    "Track upcoming events and deadlines by date."}
+                  {dashboardPage === DASHBOARD_PAGE.FAQ &&
+                    (isStudent
+                      ? "Ask a question directly to admins or faculty."
+                      : "Questions submitted by students appear here.")}
+                  {dashboardPage === DASHBOARD_PAGE.PROFILE &&
+                    "Review your profile details and contribution stats."}
+                  {dashboardPage === DASHBOARD_PAGE.STARRED &&
+                    "Quick access to the posts you marked."}
+                  {dashboardPage === DASHBOARD_PAGE.REMINDERS &&
+                    "Your saved reminders for important deadlines."}
+                </p>
               </div>
+              <div className="header-actions">
+                {dashboardPage === DASHBOARD_PAGE.DEPARTMENT && (
+                  <button
+                    className="ghost-btn compact-btn"
+                    onClick={() => navigateTo(DASHBOARD_PAGE.HOME)}
+                    type="button"
+                  >
+                    Back to Departments
+                  </button>
+                )}
+                {dashboardPage === DASHBOARD_PAGE.CALENDAR && (
+                  <select value={selectedBoardId} onChange={handleBoardSelect}>
+                    {BOARDS.map((board) => (
+                      <option key={board.id} value={board.id}>
+                        {board.shortName}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </header>
 
-              {postsLoading && <p className="hint">Loading posts...</p>}
+            {status && (
+              <p className={statusClass} role="status" aria-live="polite">
+                {status}
+              </p>
+            )}
 
-              {!postsLoading && activeTab === FEED_TAB.FEED && (
-                <div className="post-list">
-                  {filteredFeedPosts.length === 0 && <p className="hint">No active posts found.</p>}
-                  {filteredFeedPosts.map((post) => (
-                    <article key={post.id} className="post-card">
-                      <header className="post-header">
-                        <div className="badge-row">
-                          <span className="post-badge">{post.type}</span>
+            {dashboardPage === DASHBOARD_PAGE.HOME && (
+              <div className="branch-grid">
+                {BOARDS.map((board) => (
+                  <button
+                    key={board.id}
+                    className="branch-card"
+                    onClick={() => openDepartment(board.id)}
+                    type="button"
+                  >
+                    <div className="branch-media">
+                      <img src={board.thumbnail} alt={board.name} />
+                      <span className="branch-chip">{board.shortName}</span>
+                    </div>
+                    <div className="branch-body">
+                      <h3>{board.name}</h3>
+                      <p>Explore notices, events, and updates from this department.</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {dashboardPage === DASHBOARD_PAGE.CALENDAR && (
+              <div className="calendar-layout">
+                <section className="panel-card calendar-card">
+                  <header className="calendar-header">
+                    <button className="ghost-btn icon-btn" type="button" onClick={() => shiftCalendar(-1)}>
+                      Prev
+                    </button>
+                    <div>
+                      <h3>{formatDateLabel(calendarCursor)}</h3>
+                      <p className="description">Showing {selectedBoard?.shortName || "board"} schedule.</p>
+                    </div>
+                    <button className="ghost-btn icon-btn" type="button" onClick={() => shiftCalendar(1)}>
+                      Next
+                    </button>
+                  </header>
+
+                  <div className="calendar-weekdays">
+                    {WEEK_DAYS.map((day) => (
+                      <span key={day}>{day}</span>
+                    ))}
+                  </div>
+                  <div className="calendar-grid">
+                    {calendarDays.map((day) => {
+                      const dayKey = getDateKey(day.date);
+                      const dayEvents = calendarEvents.get(dayKey) || [];
+                      const isSelected = selectedCalendarKey === dayKey;
+                      const isToday = getDateKey(new Date()) === dayKey;
+                      return (
+                        <button
+                          key={`${dayKey}-${day.inMonth ? "in" : "out"}`}
+                          type="button"
+                          className={`calendar-day ${day.inMonth ? "" : "muted"} ${isSelected ? "selected" : ""} ${
+                            isToday ? "today" : ""
+                          }`}
+                          onClick={() => setCalendarSelectedDate(day.date)}
+                        >
+                          <span>{day.date.getDate()}</span>
+                          <div className="calendar-dots">
+                            {dayEvents.slice(0, 3).map((eventItem) => (
+                              <span
+                                key={`${dayKey}-${eventItem.id}`}
+                                className={`calendar-dot ${eventItem.priority}`}
+                              />
+                            ))}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="calendar-legend">
+                    <span>
+                      <span className="calendar-dot high" /> High Priority
+                    </span>
+                    <span>
+                      <span className="calendar-dot medium" /> Medium Priority
+                    </span>
+                    <span>
+                      <span className="calendar-dot low" /> Low Priority
+                    </span>
+                  </div>
+                </section>
+
+                <section className="panel-card calendar-events">
+                  <h3>
+                    {calendarSelectedDate
+                      ? calendarSelectedDate.toLocaleDateString("en-IN", { dateStyle: "full" })
+                      : "Select a date"}
+                  </h3>
+                  {selectedDayEvents.length === 0 && <p className="hint">No events or deadlines selected.</p>}
+                  {selectedDayEvents.map((eventItem) => (
+                    <article key={`${eventItem.id}-event`} className="event-card">
+                      <div>
+                        <h4>{eventItem.title}</h4>
+                        <p className="event-meta">
+                          {eventItem.boardName} - {eventItem.type}
+                        </p>
+                      </div>
+                      <span className={`event-chip ${eventItem.priority}`}>{eventItem.priority}</span>
+                    </article>
+                  ))}
+                </section>
+              </div>
+            )}
+
+            {dashboardPage === DASHBOARD_PAGE.FAQ && (
+              <div className="faq-layout">
+                <section className="panel-card">
+                  <h3>{isStudent ? "Ask a Question" : "Student Questions"}</h3>
+                  {isStudent ? (
+                    <form className="faq-form" onSubmit={handleFaqSubmit}>
+                      <label>
+                        Send to
+                        <select
+                          value={faqDraft.recipient}
+                          onChange={(event) => setFaqDraft((prev) => ({ ...prev, recipient: event.target.value }))}
+                        >
+                          {FAQ_RECIPIENTS.map((recipient) => (
+                            <option key={recipient} value={recipient}>
+                              {recipient}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <textarea
+                        placeholder="Write your question..."
+                        value={faqDraft.question}
+                        onChange={(event) => setFaqDraft((prev) => ({ ...prev, question: event.target.value }))}
+                      />
+                      <button className="primary-btn" type="submit">
+                        Send Question
+                      </button>
+                    </form>
+                  ) : (
+                    <p className="description">Questions addressed to faculty will appear in this inbox.</p>
+                  )}
+                </section>
+
+                <section className="panel-card">
+                  <h3>{isStudent ? "Your Questions" : "Inbox"}</h3>
+                  {faqItems.length === 0 && <p className="hint">No questions yet.</p>}
+                  {faqItems.map((item) => (
+                    <article key={item.id} className="faq-item">
+                      <p className="faq-question">{item.question}</p>
+                      <p className="faq-meta">
+                        To: {item.recipient} - Status: {item.status}
+                      </p>
+                    </article>
+                  ))}
+                </section>
+              </div>
+            )}
+
+            {dashboardPage === DASHBOARD_PAGE.PROFILE && (
+              <div className="profile-layout">
+                <section className="panel-card profile-card">
+                  <div className="profile-head">
+                    <span className="avatar large">{getInitials(userProfile?.name || email)}</span>
+                    <div>
+                      <h3>{userProfile?.name || "Campus member"}</h3>
+                      <p className="description">{email}</p>
+                    </div>
+                  </div>
+                  <div className="profile-grid">
+                    <div>
+                      <p className="profile-label">Role</p>
+                      <p>{userProfile?.role || "student"}</p>
+                    </div>
+                    <div>
+                      <p className="profile-label">Year</p>
+                      <p>{userProfile?.year || "NA"}</p>
+                    </div>
+                    <div>
+                      <p className="profile-label">Department</p>
+                      <p>{userProfile?.department || "Not set"}</p>
+                    </div>
+                    <div>
+                      <p className="profile-label">Approved Poster</p>
+                      <p>{userProfile?.authorApproved ? "Yes" : "No"}</p>
+                    </div>
+                  </div>
+                </section>
+
+                {canViewAuthorPosts ? (
+                  <section className="panel-card">
+                    <div className="section-head-row">
+                      <h3>Your Posts</h3>
+                      <span className="hint">{authoredPosts.length} total</span>
+                    </div>
+                    {authoredLoading && <p className="hint">Loading your posts...</p>}
+                    {!authoredLoading && authoredPosts.length === 0 && (
+                      <p className="hint">You have not posted yet.</p>
+                    )}
+                    {authoredPosts.length > 0 && (
+                      <div className="post-list">
+                        {authoredPosts.map((post) => {
+                          const canDelete =
+                            userProfile?.role === "admin" || post.visibility === "pending";
+                          return (
+                            <article key={post.id} className="post-card">
+                              <header className="post-header">
+                                <div>
+                                  <p className="post-meta">
+                                    Posted by {userProfile?.name || "You"} -{" "}
+                                    {post.boardName || selectedBoard?.shortName || "Board"}
+                                  </p>
+                                  <h4>{post.title}</h4>
+                                </div>
+                                <div className="badge-row">
+                                  <span className="post-badge">{post.type}</span>
+                                  <span className={`priority-badge ${post.priority || "medium"}`}>
+                                    {post.priority || "medium"}
+                                  </span>
+                                  {post.category && <span className="post-badge soft">{post.category}</span>}
+                                </div>
+                              </header>
+                              {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
+                                <div className="post-media-wrap">
+                                  <img
+                                    src={post.mediaUrls[0]}
+                                    alt={post.title || "Post media"}
+                                    className="post-media"
+                                    onClick={() => setLightboxImage(post.mediaUrls[0])}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        setLightboxImage(post.mediaUrls[0]);
+                                      }
+                                    }}
+                                  />
+                                </div>
+                              )}
+                              <p>{post.content}</p>
+                              <div className="post-actions">
+                                <button className="action-btn" type="button" onClick={() => openEditPost(post)}>
+                                  Edit
+                                </button>
+                                <button
+                                  className="action-btn danger"
+                                  type="button"
+                                  onClick={() => handleDeletePost(post)}
+                                  disabled={!canDelete}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                              <footer className="post-footer">
+                                <p className="post-time">{formatTimestamp(post.createdAt)}</p>
+                                {post.deadlineAt && <p>Deadline: {formatTimestamp(post.deadlineAt)}</p>}
+                                {canModerate && readStatsByPost[post.id] ? (
+                                  <p>
+                                    Views {readStatsByPost[post.id].readCount}/{readStatsByPost[post.id].eligibleCount}
+                                  </p>
+                                ) : (
+                                  <p>Views: restricted</p>
+                                )}
+                              </footer>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                ) : (
+                  <section className="panel-card">
+                    <h3>Student Overview</h3>
+                    <div className="stat-grid">
+                      <div>
+                        <p className="profile-label">Starred</p>
+                        <p>{starredPosts.length}</p>
+                      </div>
+                      <div>
+                        <p className="profile-label">Reminders</p>
+                        <p>{reminders.length}</p>
+                      </div>
+                    </div>
+                  </section>
+                )}
+              </div>
+            )}
+
+            {dashboardPage === DASHBOARD_PAGE.STARRED && (
+              <section className="panel-card">
+                <div className="section-head-row">
+                  <h3>Starred Posts</h3>
+                  <span className="hint">{starredPosts.length} saved</span>
+                </div>
+                {starredPosts.length === 0 && <p className="hint">No starred posts yet.</p>}
+                {starredPosts.length > 0 && (
+                  <div className="post-list">
+                    {starredPosts.map((post) => (
+                      <article key={post.id} className="post-card">
+                        <header className="post-header">
+                          <div>
+                            <p className="post-meta">{post.boardName || "Board"}</p>
+                            <h4>{post.title}</h4>
+                          </div>
                           <span className={`priority-badge ${post.priority || "medium"}`}>
                             {post.priority || "medium"}
                           </span>
-                          {post.category && <span className="post-badge soft">{post.category}</span>}
-                        </div>
-                        <p className="post-time">{formatTimestamp(post.createdAt)}</p>
-                      </header>
-
-                      {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
-                        <div className="post-media-wrap">
-                          <img src={post.mediaUrls[0]} alt={post.title || "Post media"} className="post-media" />
-                        </div>
-                      )}
-
-                      <h4>{post.title}</h4>
-                      <p>{post.content}</p>
-
-                      <footer className="post-footer">
-                        <p>By {post.authorName || post.authorEmail || "Unknown"}</p>
-                        {post.deadlineAt && <p>Deadline: {formatTimestamp(post.deadlineAt)}</p>}
-                        {canModerate && readStatsByPost[post.id] && (
-                          <p>
-                            Read {readStatsByPost[post.id].readCount}/{readStatsByPost[post.id].eligibleCount} (
-                            {readStatsByPost[post.id].readPercent}%)
-                          </p>
+                        </header>
+                        {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
+                          <div className="post-media-wrap">
+                            <img
+                              src={post.mediaUrls[0]}
+                              alt={post.title || "Post media"}
+                              className="post-media"
+                              onClick={() => setLightboxImage(post.mediaUrls[0])}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  setLightboxImage(post.mediaUrls[0]);
+                                }
+                              }}
+                            />
+                          </div>
                         )}
-                      </footer>
+                        <p>{post.content}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {dashboardPage === DASHBOARD_PAGE.REMINDERS && (
+              <section className="panel-card">
+                <div className="section-head-row">
+                  <h3>Reminders</h3>
+                  <span className="hint">{reminders.length} scheduled</span>
+                </div>
+                <div className="reminders-list">
+                  {reminders.length === 0 && <p className="hint">No reminders set yet.</p>}
+                  {reminders.map((reminder) => (
+                    <article key={reminder.id} className="reminder-card">
+                      <div>
+                        <h4>{reminder.title}</h4>
+                        <p className="reminder-meta">
+                          Remind on {new Date(reminder.remindAt).toLocaleString("en-IN", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          })}
+                        </p>
+                      </div>
+                      <button className="ghost-btn" type="button" onClick={() => removeReminder(reminder.id)}>
+                        Remove
+                      </button>
                     </article>
                   ))}
                 </div>
-              )}
+              </section>
+            )}
 
-              {!postsLoading && activeTab === FEED_TAB.COMPLETED && (
-                <div className="post-list">
-                  {filteredCompletedPosts.length === 0 && <p className="hint">No completed posts yet.</p>}
-                  {filteredCompletedPosts.map((post) => (
-                    <article key={post.id} className="post-card completed">
-                      <h4>{post.title}</h4>
-                      <p>{post.content}</p>
-                    </article>
-                  ))}
+            {dashboardPage === DASHBOARD_PAGE.DEPARTMENT && (
+              <div className="department-page">
+                <div className="feed-tabs">
+                  <button
+                    type="button"
+                    className={activeTab === FEED_TAB.FEED ? "tab-btn active" : "tab-btn"}
+                    onClick={() => setActiveTab(FEED_TAB.FEED)}
+                  >
+                    Feed
+                  </button>
+                  <button
+                    type="button"
+                    className={activeTab === FEED_TAB.COMPLETED ? "tab-btn active" : "tab-btn"}
+                    onClick={() => setActiveTab(FEED_TAB.COMPLETED)}
+                  >
+                    Completed
+                  </button>
+                  {canModerate && (
+                    <button
+                      type="button"
+                      className={activeTab === FEED_TAB.PENDING ? "tab-btn active" : "tab-btn"}
+                      onClick={() => setActiveTab(FEED_TAB.PENDING)}
+                    >
+                      Pending
+                    </button>
+                  )}
                 </div>
-              )}
 
-              {!postsLoading && activeTab === FEED_TAB.PENDING && canModerate && (
-                <div className="post-list">
-                  {filteredPendingPosts.length === 0 && <p className="hint">No pending posts for approval.</p>}
-                  {filteredPendingPosts.map((post) => (
-                    <article key={post.id} className="post-card pending">
-                      <h4>{post.title}</h4>
-                      <p>{post.content}</p>
-                      <footer className="pending-actions">
-                        <button
-                          type="button"
-                          className="approve-btn"
-                          disabled={approvingPostId === post.id}
-                          onClick={() => handleApproval(post.id, "approve")}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          className="reject-btn"
-                          disabled={approvingPostId === post.id}
-                          onClick={() => handleApproval(post.id, "reject")}
-                        >
-                          Reject
-                        </button>
-                      </footer>
-                    </article>
-                  ))}
+                <div className="filters-panel">
+                  <input
+                    type="text"
+                    placeholder="Search posts..."
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                  />
+                  <select value={filterType} onChange={(event) => setFilterType(event.target.value)}>
+                    <option value="all">All Types</option>
+                    {POST_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={filterPriority} onChange={(event) => setFilterPriority(event.target.value)}>
+                    <option value="all">All Priority</option>
+                    {PRIORITY_OPTIONS.map((priority) => (
+                      <option key={priority} value={priority}>
+                        {priority}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={filterYear} onChange={(event) => setFilterYear(event.target.value)}>
+                    <option value="all">All Years</option>
+                    <option value="1">1st Year</option>
+                    <option value="2">2nd Year</option>
+                    <option value="3">3rd Year</option>
+                    <option value="4">4th Year</option>
+                  </select>
+                  <select value={filterCategory} onChange={(event) => setFilterCategory(event.target.value)}>
+                    <option value="all">All Categories</option>
+                    {allCategoryValues.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
-            </div>
-          )}
 
-          <p className={statusClass} role="status" aria-live="polite">
-            {status}
-          </p>
+                {postsLoading && <p className="hint">Loading posts...</p>}
 
-          {canCreateGlobalPost && (
-            <button
-              type="button"
-              className="compose-fab"
-              onClick={() => {
-                setComposeOpen(true);
-                setIsError(false);
-                setStatus("");
-              }}
-              aria-label="Create a post"
-              title="Create a post"
-            >
-              +
-            </button>
-          )}
+                {!postsLoading && activeTab === FEED_TAB.FEED && (
+                  <div className="post-list">
+                    {filteredFeedPosts.length === 0 && <p className="hint">No active posts found.</p>}
+                    {filteredFeedPosts.map((post) => (
+                      <article key={post.id} className="post-card">
+                        <header className="post-header">
+                          <div>
+                            <p className="post-meta">
+                              Posted by {post.authorName || post.authorEmail || "Home"} - {selectedBoard?.shortName || ""}
+                            </p>
+                            <h4>{post.title}</h4>
+                          </div>
+                          <div className="badge-row">
+                            <span className="post-badge">{post.type}</span>
+                            <span className={`priority-badge ${post.priority || "medium"}`}>
+                              {post.priority || "medium"}
+                            </span>
+                            {post.category && <span className="post-badge soft">{post.category}</span>}
+                          </div>
+                        </header>
+
+                        {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
+                          <div className="post-media-wrap">
+                            <img
+                              src={post.mediaUrls[0]}
+                              alt={post.title || "Post media"}
+                              className="post-media"
+                              onClick={() => setLightboxImage(post.mediaUrls[0])}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  setLightboxImage(post.mediaUrls[0]);
+                                }
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        <p>{post.content}</p>
+
+                        <div className="post-actions">
+                          <button
+                            type="button"
+                            className={`action-btn ${starredPostIds.has(post.id) ? "active" : ""}`}
+                            onClick={() => toggleStar(post)}
+                          >
+                            {starredPostIds.has(post.id) ? "Starred" : "Star"}
+                          </button>
+                          {isStudent && (
+                            <button type="button" className="action-btn" onClick={() => openReminder(post)}>
+                              Reminder
+                            </button>
+                          )}
+                          {isStudent && (
+                            <button type="button" className="action-btn" onClick={() => openFaqForPost(post)}>
+                              Ask
+                            </button>
+                          )}
+                        </div>
+
+                        <footer className="post-footer">
+                          <p className="post-time">{formatTimestamp(post.createdAt)}</p>
+                          {post.deadlineAt && <p>Deadline: {formatTimestamp(post.deadlineAt)}</p>}
+                          {canModerate && readStatsByPost[post.id] && (
+                            <p>
+                              Read {readStatsByPost[post.id].readCount}/{readStatsByPost[post.id].eligibleCount} ({
+                                readStatsByPost[post.id].readPercent
+                              }%)
+                            </p>
+                          )}
+                        </footer>
+                      </article>
+                    ))}
+                  </div>
+                )}
+
+                {!postsLoading && activeTab === FEED_TAB.COMPLETED && (
+                  <div className="post-list">
+                    {filteredCompletedPosts.length === 0 && <p className="hint">No completed posts yet.</p>}
+                    {filteredCompletedPosts.map((post) => (
+                      <article key={post.id} className="post-card completed">
+                        <h4>{post.title}</h4>
+                        <p>{post.content}</p>
+                      </article>
+                    ))}
+                  </div>
+                )}
+
+                {!postsLoading && activeTab === FEED_TAB.PENDING && canModerate && (
+                  <div className="post-list">
+                    {filteredPendingPosts.length === 0 && <p className="hint">No pending posts for approval.</p>}
+                    {filteredPendingPosts.map((post) => (
+                      <article key={post.id} className="post-card pending">
+                        <h4>{post.title}</h4>
+                        <p>{post.content}</p>
+                        <footer className="pending-actions">
+                          <button
+                            type="button"
+                            className="approve-btn"
+                            disabled={approvingPostId === post.id}
+                            onClick={() => handleApproval(post.id, "approve")}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="reject-btn"
+                            disabled={approvingPostId === post.id}
+                            onClick={() => handleApproval(post.id, "reject")}
+                          >
+                            Reject
+                          </button>
+                        </footer>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {canCreateGlobalPost && (
+              <button
+                type="button"
+                className="compose-fab"
+                onClick={() => {
+                  setComposeOpen(true);
+                  setIsError(false);
+                  setStatus("");
+                }}
+                aria-label="Create a post"
+                title="Create a post"
+              >
+                +
+              </button>
+            )}
+          </div>
         </section>
+      )}
+
+      {reminderOpen && (
+        <div className="compose-overlay" role="dialog" aria-modal="true" aria-label="Set reminder">
+          <section className="compose-modal reminder-modal">
+            <h3>Set Reminder</h3>
+            <p className="description">Choose a date and time for this reminder.</p>
+            <input
+              type="datetime-local"
+              value={reminderDraft.date}
+              onChange={(event) => setReminderDraft((prev) => ({ ...prev, date: event.target.value }))}
+            />
+            <div className="compose-actions">
+              <button className="primary-btn" onClick={saveReminder} type="button">
+                Save Reminder
+              </button>
+              <button
+                className="ghost-btn"
+                onClick={() => {
+                  setReminderOpen(false);
+                  setReminderDraft({ postId: "", title: "", date: "" });
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {editPost && (
+        <div className="compose-overlay" role="dialog" aria-modal="true" aria-label="Edit post">
+          <section className="compose-modal">
+            <h3>Edit Post</h3>
+            <p className="description">Update your post details.</p>
+            <input
+              type="text"
+              placeholder="Title"
+              value={editForm.title}
+              onChange={(event) => setEditForm((prev) => ({ ...prev, title: event.target.value }))}
+            />
+            <textarea
+              placeholder="Write your content..."
+              value={editForm.content}
+              onChange={(event) => setEditForm((prev) => ({ ...prev, content: event.target.value }))}
+            />
+            <div className="compose-grid">
+              <input
+                type="text"
+                placeholder="Category"
+                value={editForm.category}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, category: event.target.value }))}
+              />
+              <select
+                value={editForm.priority}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, priority: event.target.value }))}
+              >
+                {PRIORITY_OPTIONS.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {priority}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="datetime-local"
+                value={editForm.deadline}
+                onChange={(event) => setEditForm((prev) => ({ ...prev, deadline: event.target.value }))}
+              />
+            </div>
+            <div className="compose-actions">
+              <button className="primary-btn" onClick={handleSaveEdit} type="button">
+                Save Changes
+              </button>
+              <button className="ghost-btn" onClick={closeEditPost} type="button">
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {lightboxImage && (
+        <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image preview">
+          <div className="lightbox-inner" role="document">
+            <button className="ghost-btn lightbox-close" type="button" onClick={() => setLightboxImage("")}>
+              Close
+            </button>
+            <img src={lightboxImage} alt="Post preview" />
+          </div>
+        </div>
       )}
 
       {composeOpen && (
@@ -1326,11 +2368,18 @@ export default function App() {
 
               <input
                 type="text"
-                placeholder="Category"
+                placeholder="Category (optional)"
                 value={composeForm.category}
                 onChange={(event) => setComposeForm((prev) => ({ ...prev, category: event.target.value }))}
               />
             </div>
+
+            <input
+              type="text"
+              placeholder="Optional link (https://...)"
+              value={composeForm.link}
+              onChange={(event) => setComposeForm((prev) => ({ ...prev, link: event.target.value }))}
+            />
 
             <label className="deadline-label">
               Deadline (optional)
@@ -1369,4 +2418,8 @@ export default function App() {
     </main>
   );
 }
+
+
+
+
 
