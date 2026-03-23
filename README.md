@@ -24,6 +24,15 @@ Open the URL shown in terminal (usually `http://localhost:5173`).
    - add `localhost`
 5. Keep your Firebase config in `src/firebase.js`.
 
+## Cloudinary setup (image uploads)
+
+1. Create a Cloudinary account.
+2. In Cloudinary dashboard, create an **unsigned upload preset**.
+3. Add these to your `.env` (see `.env.example`):
+   - `VITE_CLOUDINARY_CLOUD_NAME`
+   - `VITE_CLOUDINARY_UPLOAD_PRESET`
+   - `VITE_CLOUDINARY_FOLDER` (optional; only if your preset allows folders)
+
 ## Note on security
 
 Frontend domain checks are good for UX, but strict security should also be enforced using backend rules.
@@ -54,3 +63,15 @@ firebase login
 firebase use campusconnect-55cca
 firebase deploy --only firestore
 ```
+
+## Manual cleanup (Spark plan)
+
+If you are not on Blaze, scheduled functions are unavailable. You can run a manual cleanup using the script in `functions/`.
+
+```powershell
+cd c:\Users\srija\MINI_PROJECT\CampusConnect\functions
+$env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service-account.json"
+node scripts\purge-old-completed-posts.js --all
+```
+
+Add `--dry-run` to preview deletions or `--board cse` to clean a single department.

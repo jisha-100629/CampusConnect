@@ -78,6 +78,38 @@ service cloud.firestore {
       return value in ["active", "completed", "archived"];
     }
 
+    function isValidFaqRecipient(value) {
+      return value in [
+        "Admin",
+        "CSE Faculty",
+        "CSE-AIML Faculty",
+        "ECE Faculty",
+        "EEE Faculty",
+        "IT Faculty"
+      ];
+    }
+
+    function isValidFaqStatus(value) {
+      return value in ["Pending", "Solved"];
+    }
+
+    function facultyRecipientLabel() {
+      return currentUserDoc().data.department + " Faculty";
+    }
+
+    function isFacultyRecipient(value) {
+      return isFaculty() && value == facultyRecipientLabel();
+    }
+
+    function isOnlyLifecycleUpdate() {
+      return request.resource.data.diff(resource.data).changedKeys()
+        .hasOnly(["lifecycleStatus", "completedAt", "updatedAt"]);
+    }
+
+    function isDeadlinePassed() {
+      return resource.data.deadlineAt is timestamp && resource.data.deadlineAt <= request.time;
+    }
+
     match /users/{userId} {
       allow read: if isInstitutionalUser() && request.auth.uid == userId;
       allow create: if isInstitutionalUser()
@@ -186,6 +218,13 @@ service cloud.firestore {
         && isValidLifecycleStatus(request.resource.data.lifecycleStatus)
       ) || (
         isInstitutionalUser()
+        && isOnlyLifecycleUpdate()
+        && resource.data.lifecycleStatus == "active"
+        && request.resource.data.lifecycleStatus == "completed"
+        && isValidLifecycleStatus(request.resource.data.lifecycleStatus)
+        && isDeadlinePassed()
+      ) || (
+        isInstitutionalUser()
         && resource.data.authorUid == request.auth.uid
         && isValidVisibility(request.resource.data.visibility)
         && isValidApprovalStatus(request.resource.data.approvalStatus)
@@ -200,8 +239,36 @@ service cloud.firestore {
       allow delete: if isAdmin() || (
         isInstitutionalUser()
         && resource.data.authorUid == request.auth.uid
-        && resource.data.visibility == "pending"
       );
+    }
+
+    match /faqs/{faqId} {
+      allow read: if isInstitutionalUser() &&
+        (
+          resource.data.askedByUid == request.auth.uid ||
+          isAdmin() ||
+          isFacultyRecipient(resource.data.recipient)
+        );
+
+      allow create: if isInstitutionalUser()
+        && request.resource.data.askedByUid == request.auth.uid
+        && request.resource.data.askedByEmail == request.auth.token.email
+        && request.resource.data.question is string
+        && request.resource.data.recipient is string
+        && isValidFaqRecipient(request.resource.data.recipient)
+        && isValidFaqStatus(request.resource.data.status);
+
+      allow update: if isAdmin() || (
+        isInstitutionalUser()
+        && isFacultyRecipient(resource.data.recipient)
+        && request.resource.data.askedByUid == resource.data.askedByUid
+        && request.resource.data.askedByEmail == resource.data.askedByEmail
+        && request.resource.data.question == resource.data.question
+        && request.resource.data.recipient == resource.data.recipient
+        && isValidFaqStatus(request.resource.data.status)
+      );
+
+      allow delete: if isAdmin();
     }
 
     match /postReads/{readId} {

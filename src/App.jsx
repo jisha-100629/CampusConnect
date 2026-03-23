@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
 import { getToken } from "firebase/messaging";
 import {
@@ -17,7 +17,6 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import {
   ALLOWED_DOMAIN,
   auth,
@@ -25,7 +24,6 @@ import {
   getMessagingIfSupported,
   isAllowedEmail,
   provider,
-  storage,
 } from "./firebase";
 import "./App.css";
 
@@ -96,6 +94,14 @@ const STUDENT_YEAR_BY_PREFIX = {
   "22": 4,
 };
 
+const STUDENT_DEPARTMENT_BY_LAST4_PREFIX = {
+  "66": "CSE-AIML",
+  "05": "CSE",
+  "12": "IT",
+  "04": "ECE",
+  "02": "EEE",
+};
+
 const PRIORITY_RANK = {
   high: 1,
   medium: 2,
@@ -108,6 +114,7 @@ const MAX_UPLOAD_BYTES = 7 * 1024 * 1024;
 const UPLOAD_IDLE_TIMEOUT_MS = 90000;
 const UPLOAD_MAX_TIMEOUT_MS = 300000;
 const PUBLISH_TIMEOUT_MS = 90000;
+const COMPLETED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const FAQ_RECIPIENTS = [
   "Admin",
   "CSE Faculty",
@@ -117,6 +124,11 @@ const FAQ_RECIPIENTS = [
   "IT Faculty",
 ];
 const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "";
+const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "";
+const CLOUDINARY_FOLDER = import.meta.env.VITE_CLOUDINARY_FOLDER || "";
+const CLOUDINARY_OPTIMIZE_TRANSFORM = "f_auto,q_auto:good,w_1600,c_limit";
+const LEGACY_GROUP_WINDOW_MS = 2 * 60 * 1000;
 
 function parseEmailIdentity(email) {
   const localPart = (email || "").split("@")[0]?.toLowerCase() || "";
@@ -124,9 +136,13 @@ function parseEmailIdentity(email) {
 
   if (startsWithDigit) {
     const prefix = localPart.slice(0, 2);
+    const digits = localPart.replace(/\D/g, "");
+    const last4 = digits.length >= 4 ? digits.slice(-4) : "";
+    const deptPrefix = last4.slice(0, 2);
     return {
       role: "student",
       year: STUDENT_YEAR_BY_PREFIX[prefix] ?? null,
+      department: STUDENT_DEPARTMENT_BY_LAST4_PREFIX[deptPrefix] ?? null,
       authorApproved: false,
     };
   }
@@ -134,8 +150,33 @@ function parseEmailIdentity(email) {
   return {
     role: "faculty",
     year: null,
+    department: null,
     authorApproved: true,
   };
+}
+
+function getBoardShortName(boardId) {
+  const board = BOARDS.find((item) => item.id === boardId);
+  return board?.shortName || "";
+}
+
+function getFacultyRecipientLabel(profile) {
+  const dept = String(profile?.department || "").trim();
+  if (!dept) return "";
+  return `${dept} Faculty`;
+}
+
+function getAuthorDepartmentLabel(post, fallbackBoardId, currentProfile, currentUid) {
+  if (!post) return "";
+  if (post.authorDepartment) return post.authorDepartment;
+  if (post.authorDept) return post.authorDept;
+  if (post.authorBranch) return post.authorBranch;
+  if (currentProfile?.department && post.authorUid && post.authorUid === currentUid) {
+    return currentProfile.department;
+  }
+  const inferred = parseEmailIdentity(post.authorEmail || "");
+  if (inferred.department) return inferred.department;
+  return getBoardShortName(post.boardId || fallbackBoardId) || post.boardName || "";
 }
 
 function toStatusMessage(error, fallback) {
@@ -151,23 +192,26 @@ function toStatusMessage(error, fallback) {
   if (code === "permission-denied") {
     return "You are signed in, but Firestore permissions are denying access.";
   }
-  if (code === "storage/unauthorized") {
-    return "Image upload denied by Firebase Storage rules. Deploy storage rules: firebase deploy --only storage --project campusconnect-55cca";
+  if (code === "cloudinary/config") {
+    return "Cloudinary is not configured. Add VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET to .env.";
   }
-  if (code === "storage/unauthenticated") {
-    return "Upload failed because your session expired. Please log out and sign in again.";
+  if (code === "cloudinary/timeout") {
+    return "Image upload timed out. Try a smaller image or a stronger connection.";
   }
-  if (code === "storage/quota-exceeded") {
-    return "Firebase Storage quota exceeded for this project.";
+  if (code === "cloudinary/unauthorized") {
+    return "Cloudinary upload denied. Check your upload preset settings.";
   }
-  if (code === "storage/retry-limit-exceeded") {
-    return "Upload timed out due to network issues. Try again with a smaller image.";
+  if (code === "cloudinary/too-large") {
+    return "Image is too large for Cloudinary. Please upload a smaller file.";
   }
-  if (code === "storage/canceled") {
+  if (code === "cloudinary/network") {
+    return "Network error while uploading image. Check your connection and try again.";
+  }
+  if (code === "cloudinary/canceled") {
     return "Upload canceled.";
   }
-  if (code === "storage/unknown") {
-    return "Image upload failed. Check internet and ensure Firebase Storage is enabled for project campusconnect-55cca.";
+  if (code === "cloudinary/failed") {
+    return "Image upload failed. Check Cloudinary preset and allowed formats.";
   }
   if (code === "deadline-exceeded") {
     return "Request timed out. Please try again with a smaller image or better network.";
@@ -237,6 +281,128 @@ function getInitials(value) {
   return parts.map((part) => part[0]?.toUpperCase() || "").join("") || "CC";
 }
 
+function getOptimizedImageUrl(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith("res.cloudinary.com")) return url;
+
+    const marker = "/image/upload/";
+    const rawUrl = parsed.href;
+    const markerIndex = rawUrl.indexOf(marker);
+    if (markerIndex === -1) return url;
+
+    const afterMarker = rawUrl.slice(markerIndex + marker.length);
+    if (!afterMarker) return url;
+
+    const firstSegment = afterMarker.split("/")[0];
+    const hasTransform = (() => {
+      if (!firstSegment || /^v\d+$/.test(firstSegment)) return false;
+      const tokens = firstSegment.split(",");
+      const knownKeys = new Set([
+        "w",
+        "h",
+        "c",
+        "q",
+        "f",
+        "dpr",
+        "g",
+        "ar",
+        "x",
+        "y",
+        "z",
+        "a",
+        "b",
+        "e",
+        "t",
+        "r",
+        "bo",
+        "l",
+        "o",
+        "d",
+        "cs",
+        "co",
+        "dn",
+        "fl",
+        "fn",
+        "pg",
+      ]);
+      return tokens.every((token) => {
+        const [key] = token.split("_");
+        return key && knownKeys.has(key);
+      });
+    })();
+
+    if (hasTransform) return url;
+
+    return `${rawUrl.slice(0, markerIndex + marker.length)}${CLOUDINARY_OPTIMIZE_TRANSFORM}/${afterMarker}`;
+  } catch (error) {
+    return url;
+  }
+}
+
+function getPostMediaUrl(post) {
+  if (!post || !Array.isArray(post.mediaUrls)) return "";
+  const firstUrl = post.mediaUrls[0] || "";
+  return getOptimizedImageUrl(firstUrl);
+}
+
+function getLocalStorageKey(prefix, uid) {
+  if (!uid) return "";
+  return `${prefix}:${uid}`;
+}
+
+function loadLocalStorageJson(key, fallback) {
+  if (!key || typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function saveLocalStorageJson(key, value) {
+  if (!key || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    // Ignore storage write failures.
+  }
+}
+
+function getPostTimestampMs(post) {
+  const rawDate = post?.createdAt || post?.updatedAt || null;
+  if (!rawDate) return null;
+  const date = rawDate?.toDate ? rawDate.toDate() : new Date(rawDate);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getTime();
+}
+
+function getLegacyGroupKey(post) {
+  const author = post?.authorUid || "author";
+  const title = String(post?.title || "").trim().toLowerCase();
+  const content = String(post?.content || "").trim().toLowerCase();
+  const mediaUrl = Array.isArray(post?.mediaUrls) ? post.mediaUrls[0] || "" : "";
+  const timestampMs = getPostTimestampMs(post);
+  const bucket = timestampMs ? Math.floor(timestampMs / LEGACY_GROUP_WINDOW_MS) : "na";
+  return `${author}::${title}::${content}::${mediaUrl}::${bucket}`;
+}
+
+function getPostGroupKey(post) {
+  return post?.batchId || getLegacyGroupKey(post);
+}
+
+function createBatchId(user) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${user?.uid || "user"}_${Date.now()}_${suffix}`;
+}
+
 function isVisibleForYear(post, yearValue) {
   if (!yearValue) return true;
   if (Array.isArray(post.audienceYears) && post.audienceYears.length > 0) {
@@ -271,10 +437,24 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
   ]);
 }
 
-function uploadImageWithProgress(storageRef, file, onProgress, idleTimeoutMs = UPLOAD_IDLE_TIMEOUT_MS) {
+function uploadImageWithProgress(file, onProgress, idleTimeoutMs = UPLOAD_IDLE_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_UPLOAD_PRESET) {
+      const error = new Error("Cloudinary configuration is missing.");
+      error.code = "cloudinary/config";
+      reject(error);
+      return;
+    }
 
+    const endpoint = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    if (CLOUDINARY_FOLDER) {
+      formData.append("folder", CLOUDINARY_FOLDER);
+    }
+
+    const xhr = new XMLHttpRequest();
     let idleTimerId = null;
     let maxTimerId = null;
     let settled = false;
@@ -284,55 +464,98 @@ function uploadImageWithProgress(storageRef, file, onProgress, idleTimeoutMs = U
       if (maxTimerId) clearTimeout(maxTimerId);
     };
 
-    const failUpload = (errorMessage) => {
+    const failUpload = (errorMessage, errorCode, shouldAbort = false) => {
       if (settled) return;
       settled = true;
-      uploadTask.cancel();
       clearTimers();
+      if (shouldAbort) {
+        try {
+          xhr.abort();
+        } catch (error) {
+          // Ignore abort errors.
+        }
+      }
       const error = new Error(errorMessage);
-      error.code = "deadline-exceeded";
+      if (errorCode) {
+        error.code = errorCode;
+      }
       reject(error);
     };
 
     const resetIdleTimer = () => {
       if (idleTimerId) clearTimeout(idleTimerId);
       idleTimerId = setTimeout(() => {
-        failUpload("Image upload timed out");
+        failUpload("Image upload timed out", "cloudinary/timeout", true);
       }, idleTimeoutMs);
     };
 
     maxTimerId = setTimeout(() => {
-      failUpload("Image upload timed out");
+      failUpload("Image upload timed out", "cloudinary/timeout", true);
     }, UPLOAD_MAX_TIMEOUT_MS);
 
     resetIdleTimer();
 
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
-        if (!snapshot.totalBytes) return;
-        resetIdleTimer();
-        const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-        onProgress(progress);
-      },
-      (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimers();
-        reject(error);
-      },
-      async () => {
-        if (settled) return;
-        settled = true;
-        clearTimers();
-        try {
-          const url = await getDownloadURL(uploadTask.snapshot.ref);
-          resolve(url);
-        } catch (error) {
-          reject(error);
-        }
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      resetIdleTimer();
+      const progress = Math.round((event.loaded / event.total) * 100);
+      onProgress(progress);
+    };
+
+    xhr.onload = () => {
+      if (settled) return;
+      clearTimers();
+      settled = true;
+
+      let response = {};
+      try {
+        response = JSON.parse(xhr.responseText || "{}");
+      } catch (error) {
+        response = {};
       }
-    );
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const secureUrl = response?.secure_url;
+        if (secureUrl) {
+          onProgress(100);
+          resolve(secureUrl);
+          return;
+        }
+        const error = new Error(response?.error?.message || "Cloudinary did not return an image URL.");
+        error.code = "cloudinary/failed";
+        reject(error);
+        return;
+      }
+
+      let errorCode = "cloudinary/failed";
+      if (xhr.status === 401 || xhr.status === 403) {
+        errorCode = "cloudinary/unauthorized";
+      } else if (xhr.status === 413) {
+        errorCode = "cloudinary/too-large";
+      }
+      const error = new Error(response?.error?.message || "Image upload failed.");
+      error.code = errorCode;
+      reject(error);
+    };
+
+    xhr.onerror = () => {
+      if (settled) return;
+      failUpload("Network error while uploading image.", "cloudinary/network");
+    };
+
+    xhr.onabort = () => {
+      if (settled) return;
+      failUpload("Upload canceled.", "cloudinary/canceled");
+    };
+
+    xhr.ontimeout = () => {
+      if (settled) return;
+      failUpload("Image upload timed out", "cloudinary/timeout");
+    };
+
+    xhr.open("POST", endpoint);
+    xhr.timeout = UPLOAD_MAX_TIMEOUT_MS;
+    xhr.send(formData);
   });
 }
 
@@ -351,7 +574,6 @@ function getMessagingServiceWorkerUrl() {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
     authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
     projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
     messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
     appId: import.meta.env.VITE_FIREBASE_APP_ID || "",
   });
@@ -371,6 +593,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [theme, setTheme] = useState("campus");
+  const [sidebarPinned, setSidebarPinned] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [dashboardPage, setDashboardPage] = useState(DASHBOARD_PAGE.HOME);
   const [selectedBoardId, setSelectedBoardId] = useState(BOARDS[0].id);
@@ -389,11 +612,11 @@ export default function App() {
   const [filterType, setFilterType] = useState("all");
   const [filterPriority, setFilterPriority] = useState("all");
   const [filterYear, setFilterYear] = useState("all");
-  const [filterCategory, setFilterCategory] = useState("all");
   const [readStatsByPost, setReadStatsByPost] = useState({});
-  const [lightboxImage, setLightboxImage] = useState("");
+  const [activePost, setActivePost] = useState(null);
   const [starredPosts, setStarredPosts] = useState([]);
   const [reminders, setReminders] = useState([]);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
   const [reminderDraft, setReminderDraft] = useState({
     postId: "",
     title: "",
@@ -406,15 +629,17 @@ export default function App() {
     relatedPostId: "",
   });
   const [faqItems, setFaqItems] = useState([]);
+  const [faqLoading, setFaqLoading] = useState(false);
+  const [faqReplyDrafts, setFaqReplyDrafts] = useState({});
   const [calendarCursor, setCalendarCursor] = useState(() => new Date());
   const [calendarSelectedDate, setCalendarSelectedDate] = useState(null);
   const [authoredPosts, setAuthoredPosts] = useState([]);
+  const [authoredPostGroups, setAuthoredPostGroups] = useState({});
   const [authoredLoading, setAuthoredLoading] = useState(false);
   const [editPost, setEditPost] = useState(null);
   const [editForm, setEditForm] = useState({
     title: "",
     content: "",
-    category: "",
     priority: "medium",
     deadline: "",
   });
@@ -422,7 +647,6 @@ export default function App() {
     title: "",
     content: "",
     type: "notice",
-    category: "",
     priority: "medium",
     link: "",
     targetYear: "all",
@@ -431,22 +655,33 @@ export default function App() {
     targetBoardId: BOARDS[0].id,
   });
 
+  const starredLoadedRef = useRef(false);
+  const remindersLoadedRef = useRef(false);
+
   const selectedBoard = useMemo(
     () => BOARDS.find((board) => board.id === selectedBoardId) || BOARDS[0],
     [selectedBoardId]
   );
   const statusClass = useMemo(() => (isError ? "status error" : "status success"), [isError]);
   const canModerate = isModerator(userProfile);
+  const isAdminUser = userProfile?.role === "admin";
   const canCreateGlobalPost = Boolean(userProfile?.role === "faculty" || userProfile?.role === "admin" || userProfile?.authorApproved === true);
   const isStudent = userProfile?.role === "student";
   const canViewAuthorPosts = Boolean(
     userProfile?.role === "faculty" || userProfile?.role === "admin" || userProfile?.authorApproved === true
   );
+  const canReplyFaq = Boolean(userProfile?.role === "faculty" || userProfile?.role === "admin");
   const faqLabel = isStudent ? "FAQs" : "Questions";
+  const facultyRecipientLabel = useMemo(() => getFacultyRecipientLabel(userProfile), [userProfile]);
   const profileHandle = useMemo(() => {
+    if (userProfile?.name) return userProfile.name;
     const handle = (email || "").split("@")[0];
-    return handle || userProfile?.name || "Campus member";
+    return handle || "Srijani Manneni";
   }, [email, userProfile]);
+  const profileLabel = useMemo(() => {
+    const displayName = userProfile?.name || "Srijani Manneni";
+    return `${displayName} Profile`;
+  }, [userProfile]);
 
   const pageTitle = useMemo(() => {
     switch (dashboardPage) {
@@ -525,20 +760,49 @@ export default function App() {
     return calendarEvents.get(selectedCalendarKey) || [];
   }, [calendarEvents, selectedCalendarKey]);
   const starredPostIds = useMemo(() => new Set(starredPosts.map((post) => post.id)), [starredPosts]);
-
-  const allCategoryValues = useMemo(() => {
-    const values = [...posts, ...completedPosts, ...pendingPosts]
-      .map((item) => (item.category || "").toLowerCase().trim())
+  const activePostMediaUrl = activePost ? getPostMediaUrl(activePost) : "";
+  const activePostPriority = activePost?.priority || "medium";
+  const activePostType = activePost?.type || "notice";
+  const activePostAuthor = activePost?.authorName || activePost?.authorEmail || "CampusConnect";
+  const activePostContent = activePost?.content?.trim() || "No additional details shared yet.";
+  const activePostDepartment = useMemo(() => {
+    if (!activePost) return "";
+    return (
+      activePost.authorDepartment ||
+      activePost.authorDept ||
+      activePost.authorBranch ||
+      activePost.boardName ||
+      getAuthorDepartmentLabel(activePost, activePost.boardId || selectedBoardId, userProfile, authUser?.uid)
+    );
+  }, [activePost, selectedBoardId, userProfile, authUser?.uid]);
+  const upcomingPosts = useMemo(() => {
+    const items = [...posts, ...completedPosts];
+    const now = Date.now();
+    const mapped = items
+      .map((post) => {
+        const rawDate = post.deadlineAt || post.createdAt;
+        if (!rawDate) return null;
+        const date = rawDate?.toDate ? rawDate.toDate() : new Date(rawDate);
+        if (Number.isNaN(date.getTime())) return null;
+        return { ...post, displayDate: date };
+      })
       .filter(Boolean);
-    return Array.from(new Set(values)).sort();
-  }, [posts, completedPosts, pendingPosts]);
+
+    const upcoming = mapped.filter((post) => post.displayDate.getTime() >= now);
+    if (upcoming.length > 0) {
+      return upcoming.sort((a, b) => a.displayDate - b.displayDate).slice(0, 3);
+    }
+
+    return mapped
+      .sort((a, b) => b.displayDate - a.displayDate)
+      .slice(0, 3);
+  }, [posts, completedPosts]);
 
   function resetComposeForm() {
     setComposeForm({
       title: "",
       content: "",
       type: "notice",
-      category: "",
       priority: "medium",
       link: "",
       targetYear: "all",
@@ -555,12 +819,37 @@ export default function App() {
     setFilterType("all");
     setFilterPriority("all");
     setFilterYear("all");
-    setFilterCategory("all");
+  }
+
+  async function handleCleanupCompletedPosts() {
+    if (!isAdminUser || !selectedBoardId || cleanupBusy) return;
+    setCleanupBusy(true);
+    setIsError(false);
+    setStatus("Cleaning up old completed posts...");
+
+    try {
+      const deletedCount = await purgeOldCompletedPosts(selectedBoardId, { silentErrors: true });
+      if (deletedCount === null) {
+        setIsError(true);
+        setStatus("Unable to clean up old completed posts.");
+      } else if (deletedCount === 0) {
+        setStatus("No old completed posts to remove.");
+      } else {
+        setStatus(`Removed ${deletedCount} old completed post${deletedCount === 1 ? "" : "s"}.`);
+      }
+      await loadDepartmentData(selectedBoardId, userProfile, authUser, { silentErrors: true });
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to clean up old completed posts."));
+    } finally {
+      setCleanupBusy(false);
+    }
   }
 
   function navigateTo(page) {
     setDashboardPage(page);
     setProfileMenuOpen(false);
+    setActivePost(null);
   }
 
   function toggleTheme() {
@@ -579,14 +868,27 @@ export default function App() {
           title: post.title || "Untitled",
           content: post.content || "",
           type: post.type || "notice",
+          boardId: post.boardId || selectedBoard?.id || "",
           boardName: post.boardName || selectedBoard?.shortName || "",
+          authorName: post.authorName || "",
+          authorEmail: post.authorEmail || "",
+          authorDepartment: post.authorDepartment || post.authorDept || post.authorBranch || "",
           priority: post.priority || "medium",
           mediaUrls: post.mediaUrls || [],
           createdAt: post.createdAt || null,
+          deadlineAt: post.deadlineAt || null,
         },
         ...prev,
       ];
     });
+  }
+
+  function openPostPreview(post) {
+    setActivePost(post);
+  }
+
+  function closePostPreview() {
+    setActivePost(null);
   }
 
   function openReminder(post) {
@@ -633,25 +935,114 @@ export default function App() {
     navigateTo(DASHBOARD_PAGE.FAQ);
   }
 
-  function handleFaqSubmit(event) {
+  async function loadFaqItems() {
+    if (!authUser || !userProfile) return;
+    setFaqLoading(true);
+    try {
+      let faqQuery = null;
+      if (userProfile.role === "student") {
+        faqQuery = query(
+          collection(db, "faqs"),
+          where("askedByUid", "==", authUser.uid),
+          orderBy("createdAt", "desc"),
+          limit(120)
+        );
+      } else if (userProfile.role === "admin") {
+        faqQuery = query(collection(db, "faqs"), orderBy("createdAt", "desc"), limit(120));
+      } else {
+        const recipientLabel = getFacultyRecipientLabel(userProfile);
+        if (!recipientLabel) {
+          setFaqItems([]);
+          setFaqLoading(false);
+          return;
+        }
+        faqQuery = query(
+          collection(db, "faqs"),
+          where("recipient", "==", recipientLabel),
+          orderBy("createdAt", "desc"),
+          limit(120)
+        );
+      }
+
+      const snapshot = await getDocs(faqQuery);
+      const items = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      setFaqItems(items);
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to load questions."));
+    } finally {
+      setFaqLoading(false);
+    }
+  }
+
+  async function handleFaqSubmit(event) {
     event.preventDefault();
-    if (!faqDraft.question.trim()) {
+    if (!authUser || !userProfile) return;
+    const question = faqDraft.question.trim();
+    if (!question) {
       setIsError(true);
       setStatus("Please write your question.");
       return;
     }
-    const entry = {
-      id: `${Date.now()}`,
-      question: faqDraft.question.trim(),
-      recipient: faqDraft.recipient,
-      relatedPostId: faqDraft.relatedPostId,
-      createdAt: new Date().toISOString(),
-      status: "Pending",
-    };
-    setFaqItems((prev) => [entry, ...prev]);
-    setFaqDraft((prev) => ({ ...prev, question: "", relatedPostId: "" }));
+
     setIsError(false);
-    setStatus("Question sent.");
+    setStatus("Sending question...");
+    try {
+      await addDoc(collection(db, "faqs"), {
+        askedByUid: authUser.uid,
+        askedByName: userProfile.name || authUser.displayName || "",
+        askedByEmail: authUser.email || "",
+        askedByDepartment: userProfile.department || "",
+        askedByYear: userProfile.year ?? null,
+        question,
+        recipient: faqDraft.recipient,
+        relatedPostId: faqDraft.relatedPostId || "",
+        status: "Pending",
+        replyText: "",
+        repliedByUid: "",
+        repliedByName: "",
+        repliedByEmail: "",
+        repliedAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setFaqDraft((prev) => ({ ...prev, question: "", relatedPostId: "" }));
+      setStatus("Question sent.");
+      await loadFaqItems();
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to send question."));
+    }
+  }
+
+  async function handleFaqReply(item) {
+    if (!canReplyFaq || !authUser || !userProfile || !item?.id) return;
+    const replyText = String(faqReplyDrafts[item.id] || "").trim();
+    if (!replyText) {
+      setIsError(true);
+      setStatus("Please write a reply.");
+      return;
+    }
+
+    setIsError(false);
+    setStatus("Sending reply...");
+    try {
+      await updateDoc(doc(db, "faqs", item.id), {
+        replyText,
+        repliedByUid: authUser.uid,
+        repliedByName: userProfile.name || authUser.displayName || "",
+        repliedByEmail: authUser.email || "",
+        repliedAt: serverTimestamp(),
+        status: "Solved",
+        updatedAt: serverTimestamp(),
+      });
+      setFaqReplyDrafts((prev) => ({ ...prev, [item.id]: "" }));
+      setStatus("Reply sent.");
+      await loadFaqItems();
+    } catch (error) {
+      setIsError(true);
+      setStatus(toStatusMessage(error, "Unable to send reply."));
+    }
   }
 
   function applyFilters(list) {
@@ -661,11 +1052,10 @@ export default function App() {
     return list.filter((post) => {
       if (filterType !== "all" && post.type !== filterType) return false;
       if (filterPriority !== "all" && post.priority !== filterPriority) return false;
-      if (filterCategory !== "all" && (post.category || "").toLowerCase() !== filterCategory) return false;
       if (selectedYear && !isVisibleForYear(post, selectedYear)) return false;
 
       if (!keyword) return true;
-      const haystack = `${post.title || ""} ${post.content || ""} ${post.category || ""}`.toLowerCase();
+      const haystack = `${post.title || ""} ${post.content || ""}`.toLowerCase();
       return haystack.includes(keyword);
     });
   }
@@ -676,7 +1066,6 @@ export default function App() {
     filterType,
     filterPriority,
     filterYear,
-    filterCategory,
   ]);
   const filteredCompletedPosts = useMemo(() => applyFilters(completedPosts), [
     completedPosts,
@@ -684,7 +1073,6 @@ export default function App() {
     filterType,
     filterPriority,
     filterYear,
-    filterCategory,
   ]);
   const filteredPendingPosts = useMemo(() => applyFilters(pendingPosts), [
     pendingPosts,
@@ -692,7 +1080,6 @@ export default function App() {
     filterType,
     filterPriority,
     filterYear,
-    filterCategory,
   ]);
 
   async function writeAuditLog(action, targetId, boardId, metadata = {}) {
@@ -769,7 +1156,7 @@ export default function App() {
         name: user.displayName || "",
         email: user.email || "",
         role: inferredIdentity.role,
-        department: "",
+        department: inferredIdentity.department ?? "",
         year: inferredIdentity.year,
         authorApproved: inferredIdentity.authorApproved,
         createdAt: serverTimestamp(),
@@ -783,6 +1170,12 @@ export default function App() {
     const isAdminUser = existing.role === "admin";
     const nextRole = isAdminUser ? "admin" : inferredIdentity.role;
     const nextYear = isAdminUser ? existing.year ?? null : inferredIdentity.year;
+    const existingDepartment = typeof existing.department === "string" ? existing.department : "";
+    const nextDepartment = isAdminUser
+      ? existingDepartment
+      : inferredIdentity.role === "faculty"
+      ? existingDepartment
+      : inferredIdentity.department ?? existingDepartment;
     const nextAuthorApproved = isAdminUser
       ? existing.authorApproved === true
       : inferredIdentity.role === "faculty"
@@ -797,6 +1190,7 @@ export default function App() {
         email: user.email || existing.email || "",
         role: nextRole,
         year: nextYear,
+        department: nextDepartment,
         authorApproved: nextAuthorApproved,
       },
       { merge: true }
@@ -809,6 +1203,7 @@ export default function App() {
       email: user.email || existing.email || "",
       role: nextRole,
       year: nextYear,
+      department: nextDepartment,
       authorApproved: nextAuthorApproved,
     };
   }
@@ -899,8 +1294,46 @@ export default function App() {
     }
   }
 
+  async function purgeOldCompletedPosts(boardId, options = {}) {
+    const silentErrors = options.silentErrors === true;
+    if (!isAdminUser) return 0;
+    let deletedCount = 0;
+
+    try {
+      const cutoffDate = new Date(Date.now() - COMPLETED_RETENTION_MS);
+      const cutoffTimestamp = Timestamp.fromDate(cutoffDate);
+      const maxBatches = 5;
+      const batchSize = 30;
+
+      for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+        const cleanupQuery = query(
+          collection(db, "posts"),
+          where("boardId", "==", boardId),
+          where("lifecycleStatus", "==", "completed"),
+          where("completedAt", "<=", cutoffTimestamp),
+          orderBy("completedAt", "desc"),
+          limit(batchSize)
+        );
+        const cleanupSnapshot = await getDocs(cleanupQuery);
+        if (cleanupSnapshot.empty) break;
+
+        await Promise.all(cleanupSnapshot.docs.map((item) => deleteDoc(doc(db, "posts", item.id))));
+        deletedCount += cleanupSnapshot.size;
+
+        if (cleanupSnapshot.size < batchSize) break;
+      }
+    } catch (error) {
+      if (!silentErrors) {
+        setIsError(true);
+        setStatus(toStatusMessage(error, "Unable to clean up old completed posts."));
+      }
+      return null;
+    }
+
+    return deletedCount;
+  }
+
   async function autoCompleteExpiredPosts(boardId) {
-    if (!canModerate) return;
     try {
       const expiryQuery = query(
         collection(db, "posts"),
@@ -924,6 +1357,9 @@ export default function App() {
     } catch (error) {
       // Non-blocking.
     }
+
+    await purgeOldCompletedPosts(boardId, { silentErrors: true });
+
   }
 
   async function loadDepartmentData(boardId, profile, user, options = {}) {
@@ -1051,6 +1487,35 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!authUser?.uid) {
+      setStarredPosts([]);
+      setReminders([]);
+      starredLoadedRef.current = false;
+      remindersLoadedRef.current = false;
+      return;
+    }
+
+    const starKey = getLocalStorageKey("cc_starred_posts", authUser.uid);
+    const reminderKey = getLocalStorageKey("cc_reminders", authUser.uid);
+    setStarredPosts(loadLocalStorageJson(starKey, []));
+    setReminders(loadLocalStorageJson(reminderKey, []));
+    starredLoadedRef.current = true;
+    remindersLoadedRef.current = true;
+  }, [authUser?.uid]);
+
+  useEffect(() => {
+    if (!authUser?.uid || !starredLoadedRef.current) return;
+    const starKey = getLocalStorageKey("cc_starred_posts", authUser.uid);
+    saveLocalStorageJson(starKey, starredPosts);
+  }, [authUser?.uid, starredPosts]);
+
+  useEffect(() => {
+    if (!authUser?.uid || !remindersLoadedRef.current) return;
+    const reminderKey = getLocalStorageKey("cc_reminders", authUser.uid);
+    saveLocalStorageJson(reminderKey, reminders);
+  }, [authUser?.uid, reminders]);
+
+  useEffect(() => {
     if (!authUser || !userProfile || pushRegistered === true) return;
     registerPushToken(authUser, userProfile);
   }, [authUser, userProfile, pushRegistered]);
@@ -1072,10 +1537,33 @@ export default function App() {
   }, [dashboardPage, calendarSelectedDate]);
 
   useEffect(() => {
+    if (view !== VIEW.DASHBOARD || dashboardPage !== DASHBOARD_PAGE.FAQ) return;
+    if (!authUser || !userProfile) return;
+    loadFaqItems();
+  }, [view, dashboardPage, authUser, userProfile, facultyRecipientLabel]);
+
+  useEffect(() => {
     if (view !== VIEW.DASHBOARD || dashboardPage !== DASHBOARD_PAGE.PROFILE) return;
     if (!authUser || !userProfile || !canViewAuthorPosts) return;
     void loadAuthoredPosts();
   }, [view, dashboardPage, authUser, userProfile, canViewAuthorPosts]);
+
+  useEffect(() => {
+    if (!activePost) return;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setActivePost(null);
+      }
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activePost]);
 
   async function handleGoogleLogin() {
     setIsError(false);
@@ -1113,7 +1601,6 @@ export default function App() {
 
     const title = composeForm.title.trim();
     const content = composeForm.content.trim();
-    const category = composeForm.category.trim().toLowerCase();
     const linkValue = composeForm.link.trim();
 
     if (!title || !content) {
@@ -1158,6 +1645,7 @@ export default function App() {
       composeForm.targetMode === "all" ? BOARDS.map((board) => board.id) : [composeForm.targetBoardId];
 
     const contentWithLink = linkValue ? `${content}\n\nLink: ${linkValue}` : content;
+    const batchId = createBatchId(authUser);
 
     setSubmittingPost(true);
     setUploadProgress(0);
@@ -1167,10 +1655,8 @@ export default function App() {
     try {
       let mediaUrl = "";
       if (composeFile) {
-        const safeName = composeFile.name.replace(/\s+/g, "-");
-        const storageRef = ref(storage, `posts/${authUser.uid}/${Date.now()}-${safeName}`);
         setStatus("Uploading image... 0%");
-        mediaUrl = await uploadImageWithProgress(storageRef, composeFile, (progress) => {
+        mediaUrl = await uploadImageWithProgress(composeFile, (progress) => {
           setUploadProgress(progress);
           if (progress < 100) {
             setStatus(`Uploading image... ${progress}%`);
@@ -1188,16 +1674,16 @@ export default function App() {
             boardId,
             boardName: board?.name || boardId,
             type: composeForm.type,
-            category: category || "",
             title,
             content: contentWithLink,
             mediaUrls: mediaUrl ? [mediaUrl] : [],
+            batchId,
             priority: composeForm.priority,
             priorityRank: getPriorityRank(composeForm.priority),
             urgencyScore,
             year: targetYear,
             audienceYears: targetYear ? [targetYear] : [],
-            searchTokens: tokenizeText(`${title} ${contentWithLink} ${category} ${composeForm.type}`),
+            searchTokens: tokenizeText(`${title} ${contentWithLink} ${composeForm.type}`),
             deadlineAt: deadlineDate ? Timestamp.fromDate(deadlineDate) : null,
             completedAt: null,
             lifecycleStatus: "active",
@@ -1206,6 +1692,7 @@ export default function App() {
             authorUid: authUser.uid,
             authorName: authUser.displayName || "",
             authorEmail: authUser.email || "",
+            authorDepartment: userProfile.department || "",
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -1240,7 +1727,6 @@ export default function App() {
     setEditForm({
       title: post.title || "",
       content: post.content || "",
-      category: post.category || "",
       priority: post.priority || "medium",
       deadline: post.deadlineAt ? formatDateTimeLocal(post.deadlineAt) : "",
     });
@@ -1251,7 +1737,6 @@ export default function App() {
     setEditForm({
       title: "",
       content: "",
-      category: "",
       priority: "medium",
       deadline: "",
     });
@@ -1261,7 +1746,6 @@ export default function App() {
     if (!editPost) return;
     const title = editForm.title.trim();
     const content = editForm.content.trim();
-    const category = editForm.category.trim().toLowerCase();
 
     if (!title || !content) {
       setIsError(true);
@@ -1277,17 +1761,22 @@ export default function App() {
     }
 
     try {
-      await updateDoc(doc(db, "posts", editPost.id), {
-        title,
-        content,
-        category: category || "",
-        priority: editForm.priority,
-        priorityRank: getPriorityRank(editForm.priority),
-        urgencyScore: computeUrgencyScore(editForm.priority, deadlineDate),
-        deadlineAt: deadlineDate ? Timestamp.fromDate(deadlineDate) : null,
-        searchTokens: tokenizeText(`${title} ${content} ${category} ${editPost.type || ""}`),
-        updatedAt: serverTimestamp(),
-      });
+      const groupKey = editPost.groupKey || getPostGroupKey(editPost);
+      const groupItems = authoredPostGroups[groupKey] || [editPost];
+      await Promise.all(
+        groupItems.map((item) =>
+          updateDoc(doc(db, "posts", item.id), {
+            title,
+            content,
+            priority: editForm.priority,
+            priorityRank: getPriorityRank(editForm.priority),
+            urgencyScore: computeUrgencyScore(editForm.priority, deadlineDate),
+            deadlineAt: deadlineDate ? Timestamp.fromDate(deadlineDate) : null,
+            searchTokens: tokenizeText(`${title} ${content} ${editPost.type || ""}`),
+            updatedAt: serverTimestamp(),
+          })
+        )
+      );
       setIsError(false);
       setStatus("Post updated.");
       closeEditPost();
@@ -1303,10 +1792,17 @@ export default function App() {
     const ok = window.confirm("Delete this post? This cannot be undone.");
     if (!ok) return;
     try {
-      await deleteDoc(doc(db, "posts", post.id));
+      const groupKey = post.groupKey || getPostGroupKey(post);
+      const groupItems = authoredPostGroups[groupKey] || [post];
+      await Promise.all(groupItems.map((item) => deleteDoc(doc(db, "posts", item.id))));
       setIsError(false);
       setStatus("Post deleted.");
-      setAuthoredPosts((prev) => prev.filter((item) => item.id !== post.id));
+      setAuthoredPosts((prev) => prev.filter((item) => item.groupKey !== groupKey && item.id !== post.id));
+      setAuthoredPostGroups((prev) => {
+        const next = { ...prev };
+        delete next[groupKey];
+        return next;
+      });
     } catch (error) {
       setIsError(true);
       setStatus(toStatusMessage(error, "Unable to delete post."));
@@ -1325,8 +1821,37 @@ export default function App() {
       );
       const snapshot = await getDocs(authoredQuery);
       const items = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
-      setAuthoredPosts(items);
-      await loadReadAnalytics(items);
+      const grouped = new Map();
+      items.forEach((post) => {
+        const groupKey = getPostGroupKey(post);
+        const bucket = grouped.get(groupKey) || [];
+        bucket.push(post);
+        grouped.set(groupKey, bucket);
+      });
+
+      const deduped = Array.from(grouped.entries()).map(([groupKey, groupPosts]) => {
+        const sorted = [...groupPosts].sort((a, b) => {
+          const timeA = getPostTimestampMs(a) ?? 0;
+          const timeB = getPostTimestampMs(b) ?? 0;
+          return timeB - timeA;
+        });
+        const representative = sorted[0] || groupPosts[0];
+        return {
+          ...representative,
+          groupKey,
+          groupCount: groupPosts.length,
+        };
+      });
+
+      deduped.sort((a, b) => {
+        const timeA = getPostTimestampMs(a) ?? 0;
+        const timeB = getPostTimestampMs(b) ?? 0;
+        return timeB - timeA;
+      });
+
+      setAuthoredPostGroups(Object.fromEntries(grouped));
+      setAuthoredPosts(deduped);
+      await loadReadAnalytics(deduped);
     } catch (error) {
       setIsError(true);
       setStatus(toStatusMessage(error, "Unable to load your posts."));
@@ -1381,9 +1906,11 @@ export default function App() {
     setReminders([]);
     setReminderDraft({ postId: "", title: "", date: "" });
     setReminderOpen(false);
-    setLightboxImage("");
+    setActivePost(null);
     setFaqDraft({ recipient: FAQ_RECIPIENTS[0], question: "", relatedPostId: "" });
     setFaqItems([]);
+    setFaqReplyDrafts({});
+    setFaqLoading(false);
     setCalendarSelectedDate(null);
     setAuthoredPosts([]);
     setAuthoredLoading(false);
@@ -1400,6 +1927,7 @@ export default function App() {
     clearFilters();
     setDashboardPage(DASHBOARD_PAGE.DEPARTMENT);
     setProfileMenuOpen(false);
+    setActivePost(null);
     setStatus("");
     setIsError(false);
   }
@@ -1468,6 +1996,145 @@ export default function App() {
 
       {view === VIEW.DASHBOARD && (
         <section className="dashboard-shell" aria-hidden="false">
+          <aside className={`sidebar-rail ${sidebarPinned ? "pinned" : ""}`}>
+            <div className="rail-head">
+              <button
+                type="button"
+                className="rail-logo"
+                onClick={() => setSidebarPinned((prev) => !prev)}
+                aria-label={sidebarPinned ? "Collapse sidebar" : "Expand sidebar"}
+                title={sidebarPinned ? "Collapse sidebar" : "Expand sidebar"}
+              >
+                <span className="rail-logo-mark">CC</span>
+                <span className="rail-logo-text">CampusConnect</span>
+                <span className="rail-logo-state" aria-hidden="true">
+                  {sidebarPinned ? (
+                    <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                      <path d="M14.5 6 9.5 12l5 6" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                      <path d="m9.5 6 5 6-5 6" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="rail-pin"
+                onClick={() => setSidebarPinned((prev) => !prev)}
+                aria-pressed={sidebarPinned}
+                aria-label={sidebarPinned ? "Collapse sidebar" : "Keep sidebar open"}
+                title={sidebarPinned ? "Collapse sidebar" : "Keep sidebar open"}
+              >
+                {sidebarPinned ? (
+                  <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                    <path d="M14.5 6 9.5 12l5 6" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                    <path d="m9.5 6 5 6-5 6" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <nav className="rail-nav" aria-label="Quick navigation">
+              <button
+                type="button"
+                className={dashboardPage === DASHBOARD_PAGE.HOME ? "rail-btn active" : "rail-btn"}
+                onClick={() => navigateTo(DASHBOARD_PAGE.HOME)}
+                aria-label="Home"
+                title="Home"
+              >
+                <svg viewBox="0 0 24 24" role="presentation">
+                  <path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-8.5z" />
+                </svg>
+                <span className="rail-label">Home</span>
+              </button>
+              <button
+                type="button"
+                className={dashboardPage === DASHBOARD_PAGE.CALENDAR ? "rail-btn active" : "rail-btn"}
+                onClick={() => navigateTo(DASHBOARD_PAGE.CALENDAR)}
+                aria-label="Calendar"
+                title="Calendar"
+              >
+                <svg viewBox="0 0 24 24" role="presentation">
+                  <path d="M7 3v3m10-3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z" />
+                </svg>
+                <span className="rail-label">Calendar</span>
+              </button>
+              <button
+                type="button"
+                className={dashboardPage === DASHBOARD_PAGE.FAQ ? "rail-btn active" : "rail-btn"}
+                onClick={() => navigateTo(DASHBOARD_PAGE.FAQ)}
+                aria-label={faqLabel}
+                title={faqLabel}
+              >
+                <svg viewBox="0 0 24 24" role="presentation">
+                  <path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8l-4 4V6a1 1 0 0 1 1-1z" />
+                </svg>
+                <span className="rail-label">{faqLabel}</span>
+              </button>
+              <span className="rail-divider" aria-hidden="true" />
+              {isStudent && (
+                <button
+                  type="button"
+                  className={dashboardPage === DASHBOARD_PAGE.STARRED ? "rail-btn active" : "rail-btn"}
+                  onClick={() => navigateTo(DASHBOARD_PAGE.STARRED)}
+                  aria-label="Starred"
+                  title="Starred"
+                >
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="m12 3 2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16l-5.3 2.1 1-5.8-4.2-4.1 5.9-.9L12 3z" />
+                  </svg>
+                  <span className="rail-label">Starred</span>
+                </button>
+              )}
+              {isStudent && (
+                <button
+                  type="button"
+                  className={dashboardPage === DASHBOARD_PAGE.REMINDERS ? "rail-btn active" : "rail-btn"}
+                  onClick={() => navigateTo(DASHBOARD_PAGE.REMINDERS)}
+                  aria-label="Reminders"
+                  title="Reminders"
+                >
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 7h18s-3 0-3-7" />
+                    <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+                  </svg>
+                  <span className="rail-label">Reminders</span>
+                </button>
+              )}
+              {canCreateGlobalPost && (
+                <button
+                  type="button"
+                  className="rail-btn rail-create"
+                  onClick={() => {
+                    setComposeOpen(true);
+                    setIsError(false);
+                    setStatus("");
+                  }}
+                  aria-label="New post"
+                  title="New post"
+                >
+                  +
+                  <span className="rail-label">New Post</span>
+                </button>
+              )}
+            </nav>
+            <div className="rail-footer">
+              <button
+                type="button"
+                className={dashboardPage === DASHBOARD_PAGE.PROFILE ? "rail-btn active" : "rail-btn"}
+                onClick={() => navigateTo(DASHBOARD_PAGE.PROFILE)}
+                aria-label="Profile"
+                title="Profile"
+              >
+                <span className="avatar small">{getInitials(userProfile?.name || email)}</span>
+                <span className="rail-label">{profileLabel}</span>
+              </button>
+            </div>
+          </aside>
           <aside className="sidebar">
             <div className="brand-block">
               <div className="brand-badge">CC</div>
@@ -1513,6 +2180,7 @@ export default function App() {
               </div>
             )}
 
+            <p className="sidebar-section">Project shortcuts</p>
             <nav className="sidebar-nav">
               <button
                 type="button"
@@ -1571,6 +2239,9 @@ export default function App() {
             <div className="sidebar-footer">
               <span className="sidebar-pill">Role: {userProfile?.role || "student"}</span>
               <span className="sidebar-pill">Year: {userProfile?.year ? `${userProfile.year}` : "NA"}</span>
+              <span className="sidebar-pill">
+                Department: {userProfile?.department || "Not set"}
+              </span>
             </div>
           </aside>
 
@@ -1761,21 +2432,81 @@ export default function App() {
                       </button>
                     </form>
                   ) : (
-                    <p className="description">Questions addressed to faculty will appear in this inbox.</p>
+                    <p className="description">
+                      {userProfile?.role === "faculty" && !facultyRecipientLabel
+                        ? "Set your department to receive student questions."
+                        : "Questions addressed to faculty will appear in this inbox."}
+                    </p>
                   )}
                 </section>
 
                 <section className="panel-card">
                   <h3>{isStudent ? "Your Questions" : "Inbox"}</h3>
-                  {faqItems.length === 0 && <p className="hint">No questions yet.</p>}
-                  {faqItems.map((item) => (
-                    <article key={item.id} className="faq-item">
-                      <p className="faq-question">{item.question}</p>
-                      <p className="faq-meta">
-                        To: {item.recipient} - Status: {item.status}
-                      </p>
-                    </article>
-                  ))}
+                  {faqLoading && <p className="hint">Loading questions...</p>}
+                  {!faqLoading && faqItems.length === 0 && <p className="hint">No questions yet.</p>}
+                  {!faqLoading && faqItems.map((item) => {
+                    const statusText = item.status || "Pending";
+                    const askedByLabel = item.askedByName || item.askedByEmail || "Student";
+                    const repliedByLabel = item.repliedByName || item.repliedByEmail || "Faculty";
+                    return (
+                      <article key={item.id} className="faq-item">
+                        <p className="faq-question">{item.question}</p>
+                        {isStudent ? (
+                          <>
+                            <p className="faq-meta">
+                              To: {item.recipient || "Faculty"} · Status: {statusText}
+                            </p>
+                            <p className="faq-meta">Asked: {formatTimestamp(item.createdAt)}</p>
+                            {item.replyText && (
+                              <div>
+                                <p className="faq-meta">Reply from {repliedByLabel}</p>
+                                <p>{item.replyText}</p>
+                                {item.repliedAt && <p className="faq-meta">Replied: {formatTimestamp(item.repliedAt)}</p>}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <p className="faq-meta">
+                              From: {askedByLabel}
+                              {item.askedByDepartment ? ` · ${item.askedByDepartment}` : ""}
+                              {item.askedByYear ? ` · Year ${item.askedByYear}` : ""}
+                            </p>
+                            <p className="faq-meta">
+                              To: {item.recipient || "Faculty"} · Status: {statusText}
+                            </p>
+                            <p className="faq-meta">Asked: {formatTimestamp(item.createdAt)}</p>
+                            {item.replyText ? (
+                              <div>
+                                <p className="faq-meta">Reply from {repliedByLabel}</p>
+                                <p>{item.replyText}</p>
+                                {item.repliedAt && <p className="faq-meta">Replied: {formatTimestamp(item.repliedAt)}</p>}
+                              </div>
+                            ) : (
+                              canReplyFaq && (
+                                <div className="faq-reply">
+                                  <textarea
+                                    placeholder="Write a reply..."
+                                    value={faqReplyDrafts[item.id] || ""}
+                                    onChange={(event) =>
+                                      setFaqReplyDrafts((prev) => ({ ...prev, [item.id]: event.target.value }))
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    className="primary-btn"
+                                    onClick={() => handleFaqReply(item)}
+                                  >
+                                    Send Reply
+                                  </button>
+                                </div>
+                              )
+                            )}
+                          </>
+                        )}
+                      </article>
+                    );
+                  })}
                 </section>
               </div>
             )}
@@ -1824,14 +2555,33 @@ export default function App() {
                       <div className="post-list">
                         {authoredPosts.map((post) => {
                           const canDelete =
-                            userProfile?.role === "admin" || post.visibility === "pending";
+                            userProfile?.role === "admin" || post.authorUid === authUser?.uid;
+                          const mediaUrl = getPostMediaUrl(post);
+                          const authorDepartment = getAuthorDepartmentLabel(
+                            post,
+                            selectedBoardId,
+                            userProfile,
+                            authUser?.uid
+                          );
                           return (
-                            <article key={post.id} className="post-card">
+                            <article
+                              key={post.id}
+                              className="post-card clickable"
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => openPostPreview(post)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  openPostPreview(post);
+                                }
+                              }}
+                            >
                               <header className="post-header">
                                 <div>
                                   <p className="post-meta">
                                     Posted by {userProfile?.name || "You"} -{" "}
-                                    {post.boardName || selectedBoard?.shortName || "Board"}
+                                    {authorDepartment || "Department"}
                                   </p>
                                   <h4>{post.title}</h4>
                                 </div>
@@ -1840,35 +2590,36 @@ export default function App() {
                                   <span className={`priority-badge ${post.priority || "medium"}`}>
                                     {post.priority || "medium"}
                                   </span>
-                                  {post.category && <span className="post-badge soft">{post.category}</span>}
                                 </div>
                               </header>
-                              {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
+                              {mediaUrl && (
                                 <div className="post-media-wrap">
                                   <img
-                                    src={post.mediaUrls[0]}
+                                    src={mediaUrl}
                                     alt={post.title || "Post media"}
                                     className="post-media"
-                                    onClick={() => setLightboxImage(post.mediaUrls[0])}
-                                    role="button"
-                                    tabIndex={0}
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Enter") {
-                                        setLightboxImage(post.mediaUrls[0]);
-                                      }
-                                    }}
                                   />
                                 </div>
                               )}
                               <p>{post.content}</p>
                               <div className="post-actions">
-                                <button className="action-btn" type="button" onClick={() => openEditPost(post)}>
+                                <button
+                                  className="action-btn"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openEditPost(post);
+                                  }}
+                                >
                                   Edit
                                 </button>
                                 <button
                                   className="action-btn danger"
                                   type="button"
-                                  onClick={() => handleDeletePost(post)}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleDeletePost(post);
+                                  }}
                                   disabled={!canDelete}
                                 >
                                   Delete
@@ -1918,37 +2669,44 @@ export default function App() {
                 {starredPosts.length === 0 && <p className="hint">No starred posts yet.</p>}
                 {starredPosts.length > 0 && (
                   <div className="post-list">
-                    {starredPosts.map((post) => (
-                      <article key={post.id} className="post-card">
-                        <header className="post-header">
-                          <div>
-                            <p className="post-meta">{post.boardName || "Board"}</p>
-                            <h4>{post.title}</h4>
-                          </div>
-                          <span className={`priority-badge ${post.priority || "medium"}`}>
-                            {post.priority || "medium"}
-                          </span>
-                        </header>
-                        {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
-                          <div className="post-media-wrap">
-                            <img
-                              src={post.mediaUrls[0]}
-                              alt={post.title || "Post media"}
-                              className="post-media"
-                              onClick={() => setLightboxImage(post.mediaUrls[0])}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  setLightboxImage(post.mediaUrls[0]);
-                                }
-                              }}
-                            />
-                          </div>
-                        )}
-                        <p>{post.content}</p>
-                      </article>
-                    ))}
+                    {starredPosts.map((post) => {
+                      const mediaUrl = getPostMediaUrl(post);
+                      return (
+                        <article
+                          key={post.id}
+                          className="post-card clickable"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openPostPreview(post)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openPostPreview(post);
+                            }
+                          }}
+                        >
+                          <header className="post-header">
+                            <div>
+                              <p className="post-meta">{post.boardName || "Board"}</p>
+                              <h4>{post.title}</h4>
+                            </div>
+                            <span className={`priority-badge ${post.priority || "medium"}`}>
+                              {post.priority || "medium"}
+                            </span>
+                          </header>
+                          {mediaUrl && (
+                            <div className="post-media-wrap">
+                              <img
+                                src={mediaUrl}
+                                alt={post.title || "Post media"}
+                                className="post-media"
+                              />
+                            </div>
+                          )}
+                          <p>{post.content}</p>
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
               </section>
@@ -2040,104 +2798,231 @@ export default function App() {
                     <option value="3">3rd Year</option>
                     <option value="4">4th Year</option>
                   </select>
-                  <select value={filterCategory} onChange={(event) => setFilterCategory(event.target.value)}>
-                    <option value="all">All Categories</option>
-                    {allCategoryValues.map((category) => (
-                      <option key={category} value={category}>
-                        {category}
-                      </option>
-                    ))}
-                  </select>
                 </div>
+                {isAdminUser && (
+                  <div className="filters-panel">
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={handleCleanupCompletedPosts}
+                      disabled={cleanupBusy}
+                    >
+                      {cleanupBusy ? "Cleaning..." : "Cleanup Old Completed Posts"}
+                    </button>
+                  </div>
+                )}
 
                 {postsLoading && <p className="hint">Loading posts...</p>}
 
                 {!postsLoading && activeTab === FEED_TAB.FEED && (
                   <div className="post-list">
                     {filteredFeedPosts.length === 0 && <p className="hint">No active posts found.</p>}
-                    {filteredFeedPosts.map((post) => (
-                      <article key={post.id} className="post-card">
-                        <header className="post-header">
-                          <div>
-                            <p className="post-meta">
-                              Posted by {post.authorName || post.authorEmail || "Home"} - {selectedBoard?.shortName || ""}
-                            </p>
-                            <h4>{post.title}</h4>
-                          </div>
-                          <div className="badge-row">
-                            <span className="post-badge">{post.type}</span>
-                            <span className={`priority-badge ${post.priority || "medium"}`}>
-                              {post.priority || "medium"}
-                            </span>
-                            {post.category && <span className="post-badge soft">{post.category}</span>}
-                          </div>
-                        </header>
+                    {filteredFeedPosts.map((post) => {
+                      const mediaUrl = getPostMediaUrl(post);
+                      const authorDepartment = getAuthorDepartmentLabel(
+                        post,
+                        selectedBoardId,
+                        userProfile,
+                        authUser?.uid
+                      );
+                      return (
+                        <article
+                          key={post.id}
+                          className="post-card clickable"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openPostPreview(post)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openPostPreview(post);
+                            }
+                          }}
+                        >
+                          <header className="post-header">
+                            <div>
+                              <p className="post-meta">
+                                Posted by {post.authorName || post.authorEmail || "Home"} - {authorDepartment}
+                              </p>
+                              <h4>{post.title}</h4>
+                            </div>
+                            <div className="badge-row">
+                              <span className="post-badge">{post.type}</span>
+                              <span className={`priority-badge ${post.priority || "medium"}`}>
+                                {post.priority || "medium"}
+                              </span>
+                            </div>
+                          </header>
 
-                        {Array.isArray(post.mediaUrls) && post.mediaUrls[0] && (
-                          <div className="post-media-wrap">
-                            <img
-                              src={post.mediaUrls[0]}
-                              alt={post.title || "Post media"}
-                              className="post-media"
-                              onClick={() => setLightboxImage(post.mediaUrls[0])}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  setLightboxImage(post.mediaUrls[0]);
-                                }
+                          {mediaUrl && (
+                            <div className="post-media-wrap">
+                              <img
+                                src={mediaUrl}
+                                alt={post.title || "Post media"}
+                                className="post-media"
+                              />
+                            </div>
+                          )}
+
+                          <p>{post.content}</p>
+
+                          <div className="post-actions">
+                            <button
+                              type="button"
+                              className={`action-btn ${starredPostIds.has(post.id) ? "active" : ""}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleStar(post);
                               }}
-                            />
+                            >
+                              {starredPostIds.has(post.id) ? "Starred" : "Star"}
+                            </button>
+                            {isStudent && (
+                              <button
+                                type="button"
+                                className="action-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openReminder(post);
+                                }}
+                              >
+                                Reminder
+                              </button>
+                            )}
+                            {isStudent && (
+                              <button
+                                type="button"
+                                className="action-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openFaqForPost(post);
+                                }}
+                              >
+                                Ask
+                              </button>
+                            )}
                           </div>
-                        )}
 
-                        <p>{post.content}</p>
-
-                        <div className="post-actions">
-                          <button
-                            type="button"
-                            className={`action-btn ${starredPostIds.has(post.id) ? "active" : ""}`}
-                            onClick={() => toggleStar(post)}
-                          >
-                            {starredPostIds.has(post.id) ? "Starred" : "Star"}
-                          </button>
-                          {isStudent && (
-                            <button type="button" className="action-btn" onClick={() => openReminder(post)}>
-                              Reminder
-                            </button>
-                          )}
-                          {isStudent && (
-                            <button type="button" className="action-btn" onClick={() => openFaqForPost(post)}>
-                              Ask
-                            </button>
-                          )}
-                        </div>
-
-                        <footer className="post-footer">
-                          <p className="post-time">{formatTimestamp(post.createdAt)}</p>
-                          {post.deadlineAt && <p>Deadline: {formatTimestamp(post.deadlineAt)}</p>}
-                          {canModerate && readStatsByPost[post.id] && (
-                            <p>
-                              Read {readStatsByPost[post.id].readCount}/{readStatsByPost[post.id].eligibleCount} ({
-                                readStatsByPost[post.id].readPercent
-                              }%)
-                            </p>
-                          )}
-                        </footer>
-                      </article>
-                    ))}
+                          <footer className="post-footer">
+                            <p className="post-time">{formatTimestamp(post.createdAt)}</p>
+                            {post.deadlineAt && <p>Deadline: {formatTimestamp(post.deadlineAt)}</p>}
+                            {canModerate && readStatsByPost[post.id] && (
+                              <p>
+                                Read {readStatsByPost[post.id].readCount}/{readStatsByPost[post.id].eligibleCount} ({
+                                  readStatsByPost[post.id].readPercent
+                                }%)
+                              </p>
+                            )}
+                          </footer>
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
 
                 {!postsLoading && activeTab === FEED_TAB.COMPLETED && (
                   <div className="post-list">
                     {filteredCompletedPosts.length === 0 && <p className="hint">No completed posts yet.</p>}
-                    {filteredCompletedPosts.map((post) => (
-                      <article key={post.id} className="post-card completed">
-                        <h4>{post.title}</h4>
-                        <p>{post.content}</p>
-                      </article>
-                    ))}
+                    {filteredCompletedPosts.map((post) => {
+                      const mediaUrl = getPostMediaUrl(post);
+                      const authorDepartment = getAuthorDepartmentLabel(
+                        post,
+                        selectedBoardId,
+                        userProfile,
+                        authUser?.uid
+                      );
+                      return (
+                        <article
+                          key={post.id}
+                          className="post-card completed clickable"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openPostPreview(post)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openPostPreview(post);
+                            }
+                          }}
+                        >
+                          <header className="post-header">
+                            <div>
+                              <p className="post-meta">
+                                Posted by {post.authorName || post.authorEmail || "Home"} - {authorDepartment}
+                              </p>
+                              <h4>{post.title}</h4>
+                            </div>
+                            <div className="badge-row">
+                              <span className="post-badge">{post.type}</span>
+                              <span className={`priority-badge ${post.priority || "medium"}`}>
+                                {post.priority || "medium"}
+                              </span>
+                            </div>
+                          </header>
+
+                          {mediaUrl && (
+                            <div className="post-media-wrap">
+                              <img
+                                src={mediaUrl}
+                                alt={post.title || "Post media"}
+                                className="post-media"
+                              />
+                            </div>
+                          )}
+
+                          <p>{post.content}</p>
+
+                          <div className="post-actions">
+                            <button
+                              type="button"
+                              className={`action-btn ${starredPostIds.has(post.id) ? "active" : ""}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleStar(post);
+                              }}
+                            >
+                              {starredPostIds.has(post.id) ? "Starred" : "Star"}
+                            </button>
+                            {isStudent && (
+                              <button
+                                type="button"
+                                className="action-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openReminder(post);
+                                }}
+                              >
+                                Reminder
+                              </button>
+                            )}
+                            {isStudent && (
+                              <button
+                                type="button"
+                                className="action-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openFaqForPost(post);
+                                }}
+                              >
+                                Ask
+                              </button>
+                            )}
+                          </div>
+
+                          <footer className="post-footer">
+                            <p className="post-time">{formatTimestamp(post.createdAt)}</p>
+                            {post.deadlineAt && <p>Deadline: {formatTimestamp(post.deadlineAt)}</p>}
+                            {canModerate && readStatsByPost[post.id] && (
+                              <p>
+                                Read {readStatsByPost[post.id].readCount}/{readStatsByPost[post.id].eligibleCount} ({
+                                  readStatsByPost[post.id].readPercent
+                                }%)
+                              </p>
+                            )}
+                          </footer>
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -2189,6 +3074,66 @@ export default function App() {
               </button>
             )}
           </div>
+
+          <aside className="right-panel">
+            <section className="right-card">
+              <div className="right-profile">
+                <span className="avatar large">{getInitials(userProfile?.name || email)}</span>
+                <div>
+                  <h4>{userProfile?.name || "Campus member"}</h4>
+                  <p className="right-meta">{userProfile?.role || "student"}</p>
+                  <p className="right-meta">{userProfile?.department || "Department not set"}</p>
+                </div>
+              </div>
+            </section>
+
+            <section className="right-card">
+              <div className="right-card-head">
+                <h4>Upcoming</h4>
+                <span className="hint">{upcomingPosts.length} items</span>
+              </div>
+              <div className="right-list">
+                {upcomingPosts.length === 0 && <p className="hint">No posts yet.</p>}
+                {upcomingPosts.map((post) => (
+                  <button
+                    key={post.id}
+                    type="button"
+                    className="right-item"
+                    onClick={() => openPostPreview(post)}
+                  >
+                    <span className="right-item-title">{post.title || "Untitled"}</span>
+                      <span className="right-item-meta">
+                      {post.deadlineAt
+                        ? `Deadline \u2022 ${formatTimestamp(post.deadlineAt)}`
+                        : `Posted \u2022 ${formatTimestamp(post.createdAt)}`}
+                      </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="right-card">
+              <h4>Quick stats</h4>
+              <div className="right-stat-grid">
+                <div className="right-stat">
+                  <p className="right-stat-label">Starred</p>
+                  <p className="right-stat-value">{starredPosts.length}</p>
+                </div>
+                <div className="right-stat">
+                  <p className="right-stat-label">Reminders</p>
+                  <p className="right-stat-value">{reminders.length}</p>
+                </div>
+                <div className="right-stat">
+                  <p className="right-stat-label">Posts</p>
+                  <p className="right-stat-value">{posts.length}</p>
+                </div>
+                <div className="right-stat">
+                  <p className="right-stat-label">Completed</p>
+                  <p className="right-stat-value">{completedPosts.length}</p>
+                </div>
+              </div>
+            </section>
+          </aside>
         </section>
       )}
 
@@ -2238,12 +3183,6 @@ export default function App() {
               onChange={(event) => setEditForm((prev) => ({ ...prev, content: event.target.value }))}
             />
             <div className="compose-grid">
-              <input
-                type="text"
-                placeholder="Category"
-                value={editForm.category}
-                onChange={(event) => setEditForm((prev) => ({ ...prev, category: event.target.value }))}
-              />
               <select
                 value={editForm.priority}
                 onChange={(event) => setEditForm((prev) => ({ ...prev, priority: event.target.value }))}
@@ -2272,14 +3211,100 @@ export default function App() {
         </div>
       )}
 
-      {lightboxImage && (
-        <div className="lightbox" role="dialog" aria-modal="true" aria-label="Image preview">
-          <div className="lightbox-inner" role="document">
-            <button className="ghost-btn lightbox-close" type="button" onClick={() => setLightboxImage("")}>
-              Close
-            </button>
-            <img src={lightboxImage} alt="Post preview" />
-          </div>
+      {activePost && (
+        <div
+          className="post-view-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Post preview"
+          onClick={closePostPreview}
+        >
+          <section
+            className="post-view-card"
+            role="document"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="post-view-media">
+              {activePostMediaUrl ? (
+                <img src={activePostMediaUrl} alt={activePost.title || "Post media"} />
+              ) : (
+                <div className="post-view-placeholder">
+                  <span className="post-view-initials">{getInitials(activePost.title || "CC")}</span>
+                  <p>No image provided</p>
+                </div>
+              )}
+            </div>
+            <div className="post-view-body">
+              <header className="post-view-header">
+                <div className="post-view-author">
+                  <span className="avatar small">{getInitials(activePostAuthor)}</span>
+                  <div>
+                    <p className="post-view-author-name">{activePostAuthor}</p>
+                    <p className="post-view-author-meta">{activePostDepartment || "CampusConnect"}</p>
+                  </div>
+                </div>
+                <button className="ghost-btn icon-btn" type="button" onClick={closePostPreview}>
+                  Close
+                </button>
+              </header>
+              <div className="post-view-scroll">
+                <h3>{activePost.title || "Untitled Post"}</h3>
+                <div className="badge-row">
+                  <span className="post-badge">{activePostType}</span>
+                  <span className={`priority-badge ${activePostPriority}`}>{activePostPriority}</span>
+                </div>
+                <p className="post-view-content">{activePostContent}</p>
+              </div>
+              <footer className="post-view-footer">
+                <div className="post-view-actions">
+                  <button
+                    type="button"
+                    className={`action-btn ${starredPostIds.has(activePost.id) ? "active" : ""}`}
+                    onClick={() => toggleStar(activePost)}
+                  >
+                    {starredPostIds.has(activePost.id) ? "Starred" : "Star"}
+                  </button>
+                  {isStudent && (
+                    <button
+                      type="button"
+                      className="action-btn"
+                      onClick={() => {
+                        openReminder(activePost);
+                        closePostPreview();
+                      }}
+                    >
+                      Reminder
+                    </button>
+                  )}
+                  {isStudent && (
+                    <button
+                      type="button"
+                      className="action-btn"
+                      onClick={() => {
+                        openFaqForPost(activePost);
+                        closePostPreview();
+                      }}
+                    >
+                      Ask
+                    </button>
+                  )}
+                </div>
+                <div className="post-view-meta">
+                  <span>{formatTimestamp(activePost.createdAt)}</span>
+                  {activePost.deadlineAt && (
+                    <span>Deadline: {formatTimestamp(activePost.deadlineAt)}</span>
+                  )}
+                  {canModerate && readStatsByPost[activePost.id] && (
+                    <span>
+                      Read {readStatsByPost[activePost.id].readCount}/{
+                        readStatsByPost[activePost.id].eligibleCount
+                      } ({readStatsByPost[activePost.id].readPercent}%)
+                    </span>
+                  )}
+                </div>
+              </footer>
+            </div>
+          </section>
         </div>
       )}
 
@@ -2365,13 +3390,6 @@ export default function App() {
                 <option value="3">3rd Year</option>
                 <option value="4">4th Year</option>
               </select>
-
-              <input
-                type="text"
-                placeholder="Category (optional)"
-                value={composeForm.category}
-                onChange={(event) => setComposeForm((prev) => ({ ...prev, category: event.target.value }))}
-              />
             </div>
 
             <input

@@ -8,7 +8,6 @@ const firebaseConfig = {
   apiKey: configParams.get("apiKey"),
   authDomain: configParams.get("authDomain"),
   projectId: configParams.get("projectId"),
-  storageBucket: configParams.get("storageBucket"),
   messagingSenderId: configParams.get("messagingSenderId"),
   appId: configParams.get("appId"),
 };

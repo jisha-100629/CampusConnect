@@ -35,10 +35,10 @@ Main social-style feed item (supports notice/event/hackathon/workshop/etc).
 Required fields:
 - `boardId` string
 - `type` string: `notice | event | hackathon | workshop | announcement`
-- `category` string (free text category for filters)
 - `title` string
 - `content` string
 - `mediaUrls` array of strings (image/video/document URLs)
+- `batchId` string (shared id for multi-department posts; used to group duplicates)
 - `priority` string: `high | medium | low`
 - `priorityRank` number (recommended: high=1, medium=2, low=3)
 - `urgencyScore` number (lower means more urgent)
@@ -53,6 +53,7 @@ Required fields:
 - `authorUid` string
 - `authorName` string
 - `authorEmail` string
+- `authorDepartment` string (poster department/branch short name)
 - `createdAt` timestamp
 - `updatedAt` timestamp
 
@@ -76,7 +77,28 @@ Fields:
 - `viewerYear` number or null
 - `viewedAt` timestamp
 
-## 5) `auditLogs/{logId}`
+## 5) `faqs/{faqId}`
+Student questions and faculty replies (inbox style).
+
+Required fields:
+- `askedByUid` string
+- `askedByName` string
+- `askedByEmail` string
+- `askedByDepartment` string
+- `askedByYear` number or null
+- `recipient` string (example: `CSE Faculty`, `Admin`)
+- `question` string
+- `status` string: `Pending | Solved`
+- `replyText` string (empty until answered)
+- `repliedByUid` string (empty until answered)
+- `repliedByName` string (empty until answered)
+- `repliedByEmail` string (empty until answered)
+- `repliedAt` timestamp or null
+- `relatedPostId` string (optional)
+- `createdAt` timestamp
+- `updatedAt` timestamp
+
+## 6) `auditLogs/{logId}`
 Audit trail for enterprise-style tracking.
 
 Fields:
@@ -90,7 +112,7 @@ Fields:
 - `createdAt` timestamp
 - `metadata` map (optional)
 
-## 6) `notificationTokens/{tokenId}`
+## 7) `notificationTokens/{tokenId}`
 FCM device token storage for push delivery.
 
 Fields:
