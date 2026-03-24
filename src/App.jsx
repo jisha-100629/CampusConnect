@@ -160,6 +160,16 @@ function getBoardShortName(boardId) {
   return board?.shortName || "";
 }
 
+function getBoardIdForDepartment(department) {
+  const normalized = String(department || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const board = BOARDS.find(
+    (item) =>
+      item.id.toLowerCase() === normalized || item.shortName.toLowerCase() === normalized
+  );
+  return board?.id || "";
+}
+
 function getFacultyRecipientLabel(profile) {
   const dept = String(profile?.department || "").trim();
   if (!dept) return "";
@@ -345,6 +355,78 @@ function getPostMediaUrl(post) {
   if (!post || !Array.isArray(post.mediaUrls)) return "";
   const firstUrl = post.mediaUrls[0] || "";
   return getOptimizedImageUrl(firstUrl);
+}
+
+function isLikelyLink(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return true;
+  return trimmed.includes(".");
+}
+
+function normalizeExternalLink(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function getPostContentAndLink(post) {
+  const rawContent = String(post?.content || "");
+  let link = String(post?.link || "").trim();
+  if (!rawContent) {
+    return { content: "", link };
+  }
+  const lines = rawContent.split(/\r?\n/);
+  const cleaned = [];
+  for (const line of lines) {
+    const match = line.match(/^\s*Link:\s*(\S+)\s*$/i);
+    if (match && isLikelyLink(match[1])) {
+      if (!link) {
+        link = match[1].trim();
+      }
+      continue;
+    }
+    cleaned.push(line);
+  }
+  const content = cleaned.join("\n").trim();
+  return { content, link };
+}
+
+function renderPostBody(
+  post,
+  {
+    contentClassName = "",
+    linkClassName = "post-link",
+    stopPropagation = false,
+    emptyFallback = "",
+  } = {}
+) {
+  const { content, link } = getPostContentAndLink(post);
+  const normalizedLink = normalizeExternalLink(link);
+  const handleLinkClick = stopPropagation ? (event) => event.stopPropagation() : undefined;
+  const handleLinkKeyDown = stopPropagation ? (event) => event.stopPropagation() : undefined;
+  const showFallback = !content && emptyFallback;
+  return (
+    <>
+      {content && <p className={contentClassName || undefined}>{content}</p>}
+      {showFallback && <p className={contentClassName || undefined}>{emptyFallback}</p>}
+      {link && (
+        <p className="post-link-row">
+          <a
+            className={linkClassName}
+            href={normalizedLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={handleLinkClick}
+            onKeyDown={handleLinkKeyDown}
+          >
+            {link}
+          </a>
+        </p>
+      )}
+    </>
+  );
 }
 
 function getLocalStorageKey(prefix, uid) {
@@ -592,7 +674,7 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [authUser, setAuthUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
-  const [theme, setTheme] = useState("campus");
+  const [theme, setTheme] = useState("light");
   const [sidebarPinned, setSidebarPinned] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [dashboardPage, setDashboardPage] = useState(DASHBOARD_PAGE.HOME);
@@ -623,14 +705,28 @@ export default function App() {
     date: "",
   });
   const [reminderOpen, setReminderOpen] = useState(false);
-  const [faqDraft, setFaqDraft] = useState({
+  const createFaqDraft = (overrides = {}) => ({
     recipient: FAQ_RECIPIENTS[0],
+    recipientType: "group",
+    recipientUid: "",
+    recipientName: "",
+    recipientEmail: "",
     question: "",
     relatedPostId: "",
+    ...overrides,
   });
+  const [faqDraft, setFaqDraft] = useState(() => createFaqDraft());
   const [faqItems, setFaqItems] = useState([]);
   const [faqLoading, setFaqLoading] = useState(false);
   const [faqReplyDrafts, setFaqReplyDrafts] = useState({});
+  const [approvedAuthors, setApprovedAuthors] = useState([]);
+  const [authorsLoading, setAuthorsLoading] = useState(false);
+  const [authorSearch, setAuthorSearch] = useState("");
+  const [selectedAuthorUid, setSelectedAuthorUid] = useState("");
+  const [authorRoleFilter, setAuthorRoleFilter] = useState("all");
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [calendarCursor, setCalendarCursor] = useState(() => new Date());
   const [calendarSelectedDate, setCalendarSelectedDate] = useState(null);
   const [authoredPosts, setAuthoredPosts] = useState([]);
@@ -651,12 +747,14 @@ export default function App() {
     link: "",
     targetYear: "all",
     deadline: "",
+    eventDate: "",
     targetMode: "specific",
     targetBoardId: BOARDS[0].id,
   });
 
   const starredLoadedRef = useRef(false);
   const remindersLoadedRef = useRef(false);
+  const profileMenuRef = useRef(null);
 
   const selectedBoard = useMemo(
     () => BOARDS.find((board) => board.id === selectedBoardId) || BOARDS[0],
@@ -667,12 +765,25 @@ export default function App() {
   const isAdminUser = userProfile?.role === "admin";
   const canCreateGlobalPost = Boolean(userProfile?.role === "faculty" || userProfile?.role === "admin" || userProfile?.authorApproved === true);
   const isStudent = userProfile?.role === "student";
+  const studentBoardId = useMemo(
+    () => getBoardIdForDepartment(userProfile?.department),
+    [userProfile?.department]
+  );
+  const visibleBoards = useMemo(() => {
+    if (!isStudent) return BOARDS;
+    if (!studentBoardId) return [];
+    return BOARDS.filter((board) => board.id === studentBoardId);
+  }, [isStudent, studentBoardId]);
   const canViewAuthorPosts = Boolean(
     userProfile?.role === "faculty" || userProfile?.role === "admin" || userProfile?.authorApproved === true
   );
   const canReplyFaq = Boolean(userProfile?.role === "faculty" || userProfile?.role === "admin");
   const faqLabel = isStudent ? "FAQs" : "Questions";
   const facultyRecipientLabel = useMemo(() => getFacultyRecipientLabel(userProfile), [userProfile]);
+  const selectedAuthor = useMemo(
+    () => approvedAuthors.find((author) => author.uid === selectedAuthorUid),
+    [approvedAuthors, selectedAuthorUid]
+  );
   const profileHandle = useMemo(() => {
     if (userProfile?.name) return userProfile.name;
     const handle = (email || "").split("@")[0];
@@ -680,13 +791,13 @@ export default function App() {
   }, [email, userProfile]);
   const profileLabel = useMemo(() => {
     const displayName = userProfile?.name || "Srijani Manneni";
-    return `${displayName} Profile`;
+    return displayName;
   }, [userProfile]);
 
   const pageTitle = useMemo(() => {
     switch (dashboardPage) {
       case DASHBOARD_PAGE.HOME:
-        return "Departments";
+        return isStudent ? selectedBoard?.name || "Department Feed" : "Departments";
       case DASHBOARD_PAGE.DEPARTMENT:
         return selectedBoard?.name || "Department Feed";
       case DASHBOARD_PAGE.CALENDAR:
@@ -702,20 +813,22 @@ export default function App() {
       default:
         return "Dashboard";
     }
-  }, [dashboardPage, selectedBoard, faqLabel]);
+  }, [dashboardPage, selectedBoard, faqLabel, isStudent]);
 
   const calendarSourcePosts = useMemo(() => {
     const items = [...posts, ...completedPosts];
     if (canModerate) {
       items.push(...pendingPosts);
     }
+    if (selectedAuthorUid) {
+      return items.filter((post) => post.authorUid === selectedAuthorUid);
+    }
     return items;
-  }, [posts, completedPosts, pendingPosts, canModerate]);
+  }, [posts, completedPosts, pendingPosts, canModerate, selectedAuthorUid]);
 
   const calendarEvents = useMemo(() => {
     const map = new Map();
-    calendarSourcePosts.forEach((post) => {
-      const rawDate = post.deadlineAt || post.createdAt;
+    const addEntry = (post, rawDate, dateType) => {
       if (!rawDate) return;
       const date = rawDate?.toDate ? rawDate.toDate() : new Date(rawDate);
       if (Number.isNaN(date.getTime())) return;
@@ -728,11 +841,15 @@ export default function App() {
         priority: post.priority || "medium",
         boardName: post.boardName || selectedBoard?.shortName || "",
         date,
-        deadlineAt: post.deadlineAt || null,
+        dateType,
       };
       const bucket = map.get(key) || [];
       bucket.push(entry);
       map.set(key, bucket);
+    };
+    calendarSourcePosts.forEach((post) => {
+      addEntry(post, post.deadlineAt, "deadline");
+      addEntry(post, post.eventAt, "event");
     });
     return map;
   }, [calendarSourcePosts, selectedBoard]);
@@ -757,14 +874,20 @@ export default function App() {
   const selectedCalendarKey = calendarSelectedDate ? getDateKey(calendarSelectedDate) : "";
   const selectedDayEvents = useMemo(() => {
     if (!selectedCalendarKey) return [];
-    return calendarEvents.get(selectedCalendarKey) || [];
+    const items = calendarEvents.get(selectedCalendarKey) || [];
+    return [...items].sort((a, b) => a.date - b.date);
   }, [calendarEvents, selectedCalendarKey]);
+  const calendarPostMap = useMemo(() => {
+    return new Map(calendarSourcePosts.map((post) => [post.id, post]));
+  }, [calendarSourcePosts]);
   const starredPostIds = useMemo(() => new Set(starredPosts.map((post) => post.id)), [starredPosts]);
+  const showDepartmentFeed =
+    dashboardPage === DASHBOARD_PAGE.DEPARTMENT ||
+    (dashboardPage === DASHBOARD_PAGE.HOME && isStudent && studentBoardId);
   const activePostMediaUrl = activePost ? getPostMediaUrl(activePost) : "";
   const activePostPriority = activePost?.priority || "medium";
   const activePostType = activePost?.type || "notice";
   const activePostAuthor = activePost?.authorName || activePost?.authorEmail || "CampusConnect";
-  const activePostContent = activePost?.content?.trim() || "No additional details shared yet.";
   const activePostDepartment = useMemo(() => {
     if (!activePost) return "";
     return (
@@ -807,6 +930,7 @@ export default function App() {
       link: "",
       targetYear: "all",
       deadline: "",
+      eventDate: "",
       targetMode: "specific",
       targetBoardId: selectedBoardId,
     });
@@ -818,7 +942,7 @@ export default function App() {
     setSearchTerm("");
     setFilterType("all");
     setFilterPriority("all");
-    setFilterYear("all");
+    setFilterYear(isStudent && userProfile?.year ? String(userProfile.year) : "all");
   }
 
   async function handleCleanupCompletedPosts() {
@@ -853,7 +977,7 @@ export default function App() {
   }
 
   function toggleTheme() {
-    setTheme((prev) => (prev === "campus" ? "sunset" : "campus"));
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }
 
   function toggleStar(post) {
@@ -927,11 +1051,31 @@ export default function App() {
   }
 
   function openFaqForPost(post) {
-    setFaqDraft((prev) => ({
-      ...prev,
-      question: `Question about: ${post.title || "this post"}`,
-      relatedPostId: post.id,
-    }));
+    if (!post?.authorUid) {
+      setFaqDraft((prev) =>
+        createFaqDraft({
+          question: `Question about: ${post?.title || "this post"}`,
+          relatedPostId: post?.id || "",
+        })
+      );
+      navigateTo(DASHBOARD_PAGE.FAQ);
+      return;
+    }
+    setFaqDraft(() =>
+      createFaqDraft({
+        question: `Question about: ${post.title || "this post"}`,
+        relatedPostId: post.id,
+        recipientType: "author",
+        recipientUid: post.authorUid || "",
+        recipientName: post.authorName || "",
+        recipientEmail: post.authorEmail || "",
+      })
+    );
+    navigateTo(DASHBOARD_PAGE.FAQ);
+  }
+
+  function openFaqDirect() {
+    setFaqDraft(createFaqDraft());
     navigateTo(DASHBOARD_PAGE.FAQ);
   }
 
@@ -947,26 +1091,49 @@ export default function App() {
           orderBy("createdAt", "desc"),
           limit(120)
         );
+        const snapshot = await getDocs(faqQuery);
+        const items = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        setFaqItems(items);
       } else if (userProfile.role === "admin") {
         faqQuery = query(collection(db, "faqs"), orderBy("createdAt", "desc"), limit(120));
+        const snapshot = await getDocs(faqQuery);
+        const items = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        setFaqItems(items);
       } else {
-        const recipientLabel = getFacultyRecipientLabel(userProfile);
-        if (!recipientLabel) {
-          setFaqItems([]);
-          setFaqLoading(false);
-          return;
-        }
-        faqQuery = query(
-          collection(db, "faqs"),
-          where("recipient", "==", recipientLabel),
-          orderBy("createdAt", "desc"),
-          limit(120)
+        const queries = [];
+        queries.push(
+          query(
+            collection(db, "faqs"),
+            where("recipientUid", "==", authUser.uid),
+            orderBy("createdAt", "desc"),
+            limit(120)
+          )
         );
+        const recipientLabel = getFacultyRecipientLabel(userProfile);
+        if (recipientLabel) {
+          queries.push(
+            query(
+              collection(db, "faqs"),
+              where("recipient", "==", recipientLabel),
+              orderBy("createdAt", "desc"),
+              limit(120)
+            )
+          );
+        }
+        const snapshots = await Promise.all(queries.map((q) => getDocs(q)));
+        const map = new Map();
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            map.set(docSnap.id, { id: docSnap.id, ...docSnap.data() });
+          });
+        });
+        const items = Array.from(map.values()).sort((a, b) => {
+          const timeA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+          const timeB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+          return timeB - timeA;
+        });
+        setFaqItems(items);
       }
-
-      const snapshot = await getDocs(faqQuery);
-      const items = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-      setFaqItems(items);
     } catch (error) {
       setIsError(true);
       setStatus(toStatusMessage(error, "Unable to load questions."));
@@ -984,10 +1151,16 @@ export default function App() {
       setStatus("Please write your question.");
       return;
     }
+    if (faqDraft.recipientType === "author" && !faqDraft.recipientUid) {
+      setIsError(true);
+      setStatus("Post author could not be identified.");
+      return;
+    }
 
     setIsError(false);
     setStatus("Sending question...");
     try {
+      const isAuthorRecipient = faqDraft.recipientType === "author";
       await addDoc(collection(db, "faqs"), {
         askedByUid: authUser.uid,
         askedByName: userProfile.name || authUser.displayName || "",
@@ -995,7 +1168,11 @@ export default function App() {
         askedByDepartment: userProfile.department || "",
         askedByYear: userProfile.year ?? null,
         question,
-        recipient: faqDraft.recipient,
+        recipient: isAuthorRecipient ? "author" : faqDraft.recipient,
+        recipientType: isAuthorRecipient ? "author" : "group",
+        recipientUid: isAuthorRecipient ? faqDraft.recipientUid : "",
+        recipientName: isAuthorRecipient ? faqDraft.recipientName : "",
+        recipientEmail: isAuthorRecipient ? faqDraft.recipientEmail : "",
         relatedPostId: faqDraft.relatedPostId || "",
         status: "Pending",
         replyText: "",
@@ -1006,7 +1183,7 @@ export default function App() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      setFaqDraft((prev) => ({ ...prev, question: "", relatedPostId: "" }));
+      setFaqDraft(createFaqDraft());
       setStatus("Question sent.");
       await loadFaqItems();
     } catch (error) {
@@ -1016,7 +1193,10 @@ export default function App() {
   }
 
   async function handleFaqReply(item) {
-    if (!canReplyFaq || !authUser || !userProfile || !item?.id) return;
+    if (!authUser || !userProfile || !item?.id) return;
+    const canReplyThis =
+      canReplyFaq || (item.recipientType === "author" && item.recipientUid === authUser.uid);
+    if (!canReplyThis) return;
     const replyText = String(faqReplyDrafts[item.id] || "").trim();
     if (!replyText) {
       setIsError(true);
@@ -1050,6 +1230,7 @@ export default function App() {
     const selectedYear = filterYear === "all" ? null : Number(filterYear);
 
     return list.filter((post) => {
+      if (selectedAuthorUid && post.authorUid !== selectedAuthorUid) return false;
       if (filterType !== "all" && post.type !== filterType) return false;
       if (filterPriority !== "all" && post.priority !== filterPriority) return false;
       if (selectedYear && !isVisibleForYear(post, selectedYear)) return false;
@@ -1066,6 +1247,7 @@ export default function App() {
     filterType,
     filterPriority,
     filterYear,
+    selectedAuthorUid,
   ]);
   const filteredCompletedPosts = useMemo(() => applyFilters(completedPosts), [
     completedPosts,
@@ -1073,6 +1255,7 @@ export default function App() {
     filterType,
     filterPriority,
     filterYear,
+    selectedAuthorUid,
   ]);
   const filteredPendingPosts = useMemo(() => applyFilters(pendingPosts), [
     pendingPosts,
@@ -1080,6 +1263,7 @@ export default function App() {
     filterType,
     filterPriority,
     filterYear,
+    selectedAuthorUid,
   ]);
 
   async function writeAuditLog(action, targetId, boardId, metadata = {}) {
@@ -1105,10 +1289,26 @@ export default function App() {
     const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
     if (!vapidKey || pushRegistered) return;
     if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
+    const notificationBlockKey = "cc_notif_prompt_blocked";
 
     try {
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") return;
+      if (Notification.permission === "denied") return;
+      if (Notification.permission === "default") {
+        try {
+          if (localStorage.getItem(notificationBlockKey) === "1") return;
+        } catch (error) {
+          // Ignore storage access errors.
+        }
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          try {
+            localStorage.setItem(notificationBlockKey, "1");
+          } catch (error) {
+            // Ignore storage access errors.
+          }
+          return;
+        }
+      }
 
       const messaging = await getMessagingIfSupported();
       if (!messaging) return;
@@ -1334,43 +1534,80 @@ export default function App() {
   }
 
   async function autoCompleteExpiredPosts(boardId) {
-    try {
+    const nowTimestamp = Timestamp.now();
+    const nowMs = Date.now();
+    const expiredMap = new Map();
+
+    const tryCollect = async (field) => {
       const expiryQuery = query(
         collection(db, "posts"),
         where("boardId", "==", boardId),
         where("lifecycleStatus", "==", "active"),
-        where("deadlineAt", "<=", Timestamp.now()),
-        orderBy("deadlineAt", "asc"),
+        where(field, "<=", nowTimestamp),
+        orderBy(field, "asc"),
         limit(30)
       );
-      const expiredSnapshot = await getDocs(expiryQuery);
-      for (const item of expiredSnapshot.docs) {
-        const data = item.data();
-        if (data.visibility !== "published") continue;
-        await updateDoc(doc(db, "posts", item.id), {
-          lifecycleStatus: "completed",
-          completedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        await writeAuditLog("mark_completed", item.id, boardId, { automated: true });
-      }
+      const snapshot = await getDocs(expiryQuery);
+      snapshot.docs.forEach((docSnap) => {
+        expiredMap.set(docSnap.id, docSnap);
+      });
+    };
+
+    try {
+      await tryCollect("deadlineAt");
+    } catch (error) {
+      // Non-blocking.
+    }
+    try {
+      await tryCollect("eventAt");
     } catch (error) {
       // Non-blocking.
     }
 
-    await purgeOldCompletedPosts(boardId, { silentErrors: true });
+    for (const item of expiredMap.values()) {
+      const data = item.data();
+      if (data.visibility !== "published") continue;
+      const deadlineMs = data.deadlineAt?.toMillis ? data.deadlineAt.toMillis() : new Date(data.deadlineAt || 0).getTime();
+      const eventMs = data.eventAt?.toMillis ? data.eventAt.toMillis() : new Date(data.eventAt || 0).getTime();
+      const deadlineExpired = Number.isFinite(deadlineMs) && deadlineMs > 0 && deadlineMs <= nowMs;
+      const eventExpired = Number.isFinite(eventMs) && eventMs > 0 && eventMs <= nowMs;
+      if (!deadlineExpired && !eventExpired) continue;
 
+      await updateDoc(doc(db, "posts", item.id), {
+        lifecycleStatus: "completed",
+        completedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await writeAuditLog("mark_completed", item.id, boardId, { automated: true });
+    }
+
+    await purgeOldCompletedPosts(boardId, { silentErrors: true });
   }
 
   async function loadDepartmentData(boardId, profile, user, options = {}) {
     const silentErrors = options.silentErrors === true;
     setPostsLoading(true);
     try {
-      await autoCompleteExpiredPosts(boardId);
+      const isStudentProfile = profile?.role === "student";
+      const allowedBoardId = isStudentProfile
+        ? getBoardIdForDepartment(profile?.department)
+        : boardId;
+      if (isStudentProfile && !allowedBoardId) {
+        setPosts([]);
+        setCompletedPosts([]);
+        setPendingPosts([]);
+        setPostsLoading(false);
+        return;
+      }
+      const finalBoardId = allowedBoardId || boardId;
+      if (finalBoardId !== boardId) {
+        setSelectedBoardId(finalBoardId);
+      }
+      await autoCompleteExpiredPosts(finalBoardId);
 
       const feedQuery = query(
         collection(db, "posts"),
-        where("boardId", "==", boardId),
+        where("boardId", "==", finalBoardId),
         where("visibility", "==", "published"),
         where("lifecycleStatus", "==", "active"),
         orderBy("urgencyScore", "asc"),
@@ -1381,14 +1618,14 @@ export default function App() {
       const completedQuery = canModerate
         ? query(
             collection(db, "posts"),
-            where("boardId", "==", boardId),
+            where("boardId", "==", finalBoardId),
             where("lifecycleStatus", "==", "completed"),
             orderBy("completedAt", "desc"),
             limit(80)
           )
         : query(
             collection(db, "posts"),
-            where("boardId", "==", boardId),
+            where("boardId", "==", finalBoardId),
             where("visibility", "==", "published"),
             where("lifecycleStatus", "==", "completed"),
             orderBy("completedAt", "desc"),
@@ -1398,7 +1635,7 @@ export default function App() {
       const pendingQuery = canModerate
         ? query(
             collection(db, "posts"),
-            where("boardId", "==", boardId),
+            where("boardId", "==", finalBoardId),
             where("approvalStatus", "==", "pending"),
             orderBy("createdAt", "desc"),
             limit(80)
@@ -1418,13 +1655,20 @@ export default function App() {
       const nextPendingPosts = pendingSnapshot
         ? pendingSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
         : [];
+      const filterForStudentYear = (items) => {
+        if (!isStudentProfile || !profile?.year) return items;
+        return items.filter((post) => isVisibleForYear(post, profile.year));
+      };
+      const filteredFeed = filterForStudentYear(nextFeedPosts);
+      const filteredCompleted = filterForStudentYear(nextCompletedPosts);
+      const filteredPending = filterForStudentYear(nextPendingPosts);
 
-      setPosts(nextFeedPosts);
-      setCompletedPosts(nextCompletedPosts);
-      setPendingPosts(nextPendingPosts);
+      setPosts(filteredFeed);
+      setCompletedPosts(filteredCompleted);
+      setPendingPosts(filteredPending);
 
-      await markFeedPostsRead(nextFeedPosts, user, profile);
-      await loadReadAnalytics(nextFeedPosts);
+      await markFeedPostsRead(filteredFeed, user, profile);
+      await loadReadAnalytics(filteredFeed);
     } catch (error) {
       if (!silentErrors) {
         setIsError(true);
@@ -1470,6 +1714,11 @@ export default function App() {
         setAuthUser(user);
         setEmail(userEmail);
         setUserProfile(profile);
+        const nextStudentBoardId =
+          profile.role === "student" ? getBoardIdForDepartment(profile.department) : "";
+        if (nextStudentBoardId) {
+          setSelectedBoardId(nextStudentBoardId);
+        }
         setDashboardPage(DASHBOARD_PAGE.HOME);
         setIsError(false);
         setStatus("Login successful.");
@@ -1524,11 +1773,15 @@ export default function App() {
     if (view !== VIEW.DASHBOARD || !authUser || !userProfile) {
       return;
     }
-    if (dashboardPage !== DASHBOARD_PAGE.DEPARTMENT && dashboardPage !== DASHBOARD_PAGE.CALENDAR) {
+    const shouldLoadDepartment =
+      dashboardPage === DASHBOARD_PAGE.DEPARTMENT ||
+      dashboardPage === DASHBOARD_PAGE.CALENDAR ||
+      (dashboardPage === DASHBOARD_PAGE.HOME && isStudent && studentBoardId);
+    if (!shouldLoadDepartment) {
       return;
     }
     loadDepartmentData(selectedBoardId, userProfile, authUser);
-  }, [view, dashboardPage, selectedBoardId, authUser, userProfile]);
+  }, [view, dashboardPage, selectedBoardId, authUser, userProfile, isStudent]);
 
   useEffect(() => {
     if (dashboardPage === DASHBOARD_PAGE.CALENDAR && !calendarSelectedDate) {
@@ -1537,10 +1790,30 @@ export default function App() {
   }, [dashboardPage, calendarSelectedDate]);
 
   useEffect(() => {
+    if (isStudent && userProfile?.year) {
+      setFilterYear(String(userProfile.year));
+    }
+  }, [isStudent, userProfile?.year]);
+
+  useEffect(() => {
     if (view !== VIEW.DASHBOARD || dashboardPage !== DASHBOARD_PAGE.FAQ) return;
     if (!authUser || !userProfile) return;
     loadFaqItems();
   }, [view, dashboardPage, authUser, userProfile, facultyRecipientLabel]);
+
+  useEffect(() => {
+    if (view !== VIEW.DASHBOARD || !authUser) return;
+    loadApprovedAuthors();
+  }, [view, authUser]);
+
+  useEffect(() => {
+    if (view !== VIEW.LOGIN) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [view]);
 
   useEffect(() => {
     if (view !== VIEW.DASHBOARD || dashboardPage !== DASHBOARD_PAGE.PROFILE) return;
@@ -1564,6 +1837,19 @@ export default function App() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [activePost]);
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    const handleClick = (event) => {
+      if (!profileMenuRef.current) return;
+      if (!profileMenuRef.current.contains(event.target)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    window.addEventListener("click", handleClick);
+    return () => {
+      window.removeEventListener("click", handleClick);
+    };
+  }, [profileMenuOpen]);
 
   async function handleGoogleLogin() {
     setIsError(false);
@@ -1581,6 +1867,11 @@ export default function App() {
       setAuthUser(result.user);
       setEmail(userEmail);
       setUserProfile(profile);
+      const nextStudentBoardId =
+        profile.role === "student" ? getBoardIdForDepartment(profile.department) : "";
+      if (nextStudentBoardId) {
+        setSelectedBoardId(nextStudentBoardId);
+      }
       setDashboardPage(DASHBOARD_PAGE.HOME);
       setIsError(false);
       setStatus("Login successful.");
@@ -1631,6 +1922,17 @@ export default function App() {
     if (deadlineDate && Number.isNaN(deadlineDate.getTime())) {
       setIsError(true);
       setStatus("Invalid deadline format.");
+      return;
+    }
+    const shouldUseEventDate =
+      composeForm.type === "event" ||
+      composeForm.type === "hackathon" ||
+      composeForm.type === "workshop";
+    const eventDate =
+      shouldUseEventDate && composeForm.eventDate ? new Date(composeForm.eventDate) : null;
+    if (eventDate && Number.isNaN(eventDate.getTime())) {
+      setIsError(true);
+      setStatus("Invalid event date format.");
       return;
     }
 
@@ -1685,6 +1987,7 @@ export default function App() {
             audienceYears: targetYear ? [targetYear] : [],
             searchTokens: tokenizeText(`${title} ${contentWithLink} ${composeForm.type}`),
             deadlineAt: deadlineDate ? Timestamp.fromDate(deadlineDate) : null,
+            eventAt: eventDate ? Timestamp.fromDate(eventDate) : null,
             completedAt: null,
             lifecycleStatus: "active",
             visibility: "published",
@@ -1794,20 +2097,146 @@ export default function App() {
     try {
       const groupKey = post.groupKey || getPostGroupKey(post);
       const groupItems = authoredPostGroups[groupKey] || [post];
+      const deletedIds = new Set(groupItems.map((item) => item.id));
+      const cleanupReads = async () => {
+        const snapshots = await Promise.all(
+          Array.from(deletedIds).map((postId) =>
+            getDocs(query(collection(db, "postReads"), where("postId", "==", postId)))
+          )
+        );
+        const deletes = [];
+        snapshots.forEach((snapshot) => {
+          snapshot.forEach((docSnap) => {
+            deletes.push(deleteDoc(doc(db, "postReads", docSnap.id)));
+          });
+        });
+        if (deletes.length > 0) {
+          await Promise.all(deletes);
+        }
+      };
+      let cleanupFailed = false;
+      try {
+        await cleanupReads();
+      } catch (cleanupError) {
+        cleanupFailed = true;
+      }
       await Promise.all(groupItems.map((item) => deleteDoc(doc(db, "posts", item.id))));
-      setIsError(false);
-      setStatus("Post deleted.");
+      if (cleanupFailed) {
+        setIsError(true);
+        setStatus("Post deleted, but read analytics could not be removed.");
+      } else {
+        setIsError(false);
+        setStatus("Post deleted.");
+      }
       setAuthoredPosts((prev) => prev.filter((item) => item.groupKey !== groupKey && item.id !== post.id));
       setAuthoredPostGroups((prev) => {
         const next = { ...prev };
         delete next[groupKey];
         return next;
       });
+      setPosts((prev) => prev.filter((item) => !deletedIds.has(item.id)));
+      setCompletedPosts((prev) => prev.filter((item) => !deletedIds.has(item.id)));
+      setPendingPosts((prev) => prev.filter((item) => !deletedIds.has(item.id)));
+      setStarredPosts((prev) => prev.filter((item) => !deletedIds.has(item.id)));
+      setReminders((prev) => prev.filter((item) => !deletedIds.has(item.postId)));
+      setReadStatsByPost((prev) => {
+        const next = { ...prev };
+        deletedIds.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
+      if (activePost && deletedIds.has(activePost.id)) {
+        setActivePost(null);
+      }
     } catch (error) {
       setIsError(true);
       setStatus(toStatusMessage(error, "Unable to delete post."));
     }
   }
+
+  async function loadApprovedAuthors() {
+    if (!authUser) return;
+    setAuthorsLoading(true);
+    try {
+      const snapshot = await getDocs(
+        query(collection(db, "users"), where("authorApproved", "==", true))
+      );
+      const items = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          ...data,
+          uid: data.uid || docSnap.id,
+        };
+      });
+      items.sort((a, b) =>
+        String(a.name || a.email || "").localeCompare(String(b.name || b.email || ""))
+      );
+      setApprovedAuthors(items);
+    } catch (error) {
+      setApprovedAuthors([]);
+    } finally {
+      setAuthorsLoading(false);
+    }
+  }
+
+  const filteredAuthors = useMemo(() => {
+    let items = approvedAuthors;
+    if (isStudent && studentBoardId) {
+      items = items.filter(
+        (author) => getBoardIdForDepartment(author.department) === studentBoardId
+      );
+    }
+    if (authorRoleFilter !== "all") {
+      items = items.filter((author) => (author.role || "faculty") === authorRoleFilter);
+    }
+    const term = authorSearch.trim().toLowerCase();
+    if (!term) return items;
+    return items.filter((author) => {
+      const haystack = `${author.name || ""} ${author.email || ""} ${author.department || ""}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [approvedAuthors, authorSearch, isStudent, studentBoardId, authorRoleFilter]);
+
+  function selectAuthor(author) {
+    const uid = author?.uid || author?.id;
+    if (!uid) return;
+    setSelectedAuthorUid(uid);
+    setActiveTab(FEED_TAB.FEED);
+    setSearchTerm("");
+    setFilterType("all");
+    setFilterPriority("all");
+    if (!isStudent) {
+      const boardId = getBoardIdForDepartment(author.department);
+      if (boardId) {
+        setSelectedBoardId(boardId);
+      }
+      setDashboardPage(DASHBOARD_PAGE.DEPARTMENT);
+    } else {
+      setDashboardPage(DASHBOARD_PAGE.HOME);
+    }
+  }
+
+  function clearAuthorFilter() {
+    setSelectedAuthorUid("");
+  }
+
+  function openMobileNav() {
+    setMobileNavOpen(true);
+    setMobileSearchOpen(false);
+  }
+
+  function openMobileSearch() {
+    setMobileSearchOpen(true);
+    setMobileNavOpen(false);
+  }
+
+  function closeMobileDrawers() {
+    setMobileNavOpen(false);
+    setMobileSearchOpen(false);
+  }
+
 
   async function loadAuthoredPosts() {
     if (!authUser || !canViewAuthorPosts) return;
@@ -1902,12 +2331,14 @@ export default function App() {
     clearFilters();
     setComposeOpen(false);
     setProfileMenuOpen(false);
+    setAuthorSearch("");
+    setSelectedAuthorUid("");
     setStarredPosts([]);
     setReminders([]);
     setReminderDraft({ postId: "", title: "", date: "" });
     setReminderOpen(false);
     setActivePost(null);
-    setFaqDraft({ recipient: FAQ_RECIPIENTS[0], question: "", relatedPostId: "" });
+    setFaqDraft(createFaqDraft());
     setFaqItems([]);
     setFaqReplyDrafts({});
     setFaqLoading(false);
@@ -1921,11 +2352,13 @@ export default function App() {
   }
 
   function openDepartment(boardId) {
-    setSelectedBoardId(boardId);
-    setComposeForm((prev) => ({ ...prev, targetBoardId: boardId, targetMode: "specific" }));
+    const nextBoardId = isStudent && studentBoardId ? studentBoardId : boardId;
+    setSelectedBoardId(nextBoardId);
+    setComposeForm((prev) => ({ ...prev, targetBoardId: nextBoardId, targetMode: "specific" }));
     setActiveTab(FEED_TAB.FEED);
+    setSelectedAuthorUid("");
     clearFilters();
-    setDashboardPage(DASHBOARD_PAGE.DEPARTMENT);
+    setDashboardPage(isStudent ? DASHBOARD_PAGE.HOME : DASHBOARD_PAGE.DEPARTMENT);
     setProfileMenuOpen(false);
     setActivePost(null);
     setStatus("");
@@ -1934,8 +2367,10 @@ export default function App() {
 
   function handleBoardSelect(event) {
     const nextBoardId = event.target.value;
-    setSelectedBoardId(nextBoardId);
-    setComposeForm((prev) => ({ ...prev, targetBoardId: nextBoardId }));
+    const allowedBoardId = isStudent && studentBoardId ? studentBoardId : nextBoardId;
+    setSelectedBoardId(allowedBoardId);
+    setComposeForm((prev) => ({ ...prev, targetBoardId: allowedBoardId }));
+    setSelectedAuthorUid("");
   }
 
   function shiftCalendar(monthDelta) {
@@ -1953,7 +2388,7 @@ export default function App() {
   }
 
   return (
-    <main className={`app-shell ${theme === "sunset" ? "theme-sunset" : "theme-campus"}`}>
+    <main className={`app-shell ${theme === "dark" ? "theme-dark" : "theme-light"} view-${view}`}>
       <div className="bg-orb orb-one" aria-hidden="true" />
       <div className="bg-orb orb-two" aria-hidden="true" />
 
@@ -1995,7 +2430,257 @@ export default function App() {
       )}
 
       {view === VIEW.DASHBOARD && (
-        <section className="dashboard-shell" aria-hidden="false">
+        <section
+          className={`dashboard-shell ${isRightPanelOpen ? "right-open" : "right-collapsed"}`}
+          aria-hidden="false"
+        >
+          <div className="mobile-topbar">
+            <button
+              type="button"
+              className="mobile-topbar-btn"
+              onClick={openMobileNav}
+              aria-label="Open menu"
+              title="Open menu"
+            >
+              <span className="mobile-cc">CC</span>
+            </button>
+            <button
+              type="button"
+              className="mobile-topbar-btn"
+              onClick={openMobileSearch}
+              aria-label="Search approved posters"
+              title="Search approved posters"
+            >
+              <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" />
+                <line x1="16.2" y1="16.2" x2="20" y2="20" />
+              </svg>
+            </button>
+          </div>
+
+          {(mobileNavOpen || mobileSearchOpen) && (
+            <button
+              type="button"
+              className="mobile-scrim"
+              aria-label="Close menu"
+              onClick={closeMobileDrawers}
+            />
+          )}
+
+          <aside className={`mobile-drawer left ${mobileNavOpen ? "open" : ""}`} aria-hidden={!mobileNavOpen}>
+            <div className="mobile-drawer-header">
+              <span className="mobile-cc">CC</span>
+              <div>
+                <p className="mobile-drawer-title">CampusConnect</p>
+                <p className="mobile-drawer-subtitle">{userProfile?.role || "student"}</p>
+              </div>
+              <button
+                type="button"
+                className="ghost-btn icon-btn"
+                onClick={closeMobileDrawers}
+                aria-label="Close menu"
+              >
+                Close
+              </button>
+            </div>
+            <nav className="mobile-drawer-nav">
+              <button
+                type="button"
+                className="mobile-drawer-item"
+                onClick={() => {
+                  navigateTo(DASHBOARD_PAGE.HOME);
+                  closeMobileDrawers();
+                }}
+              >
+                Home
+              </button>
+              <button
+                type="button"
+                className="mobile-drawer-item"
+                onClick={() => {
+                  navigateTo(DASHBOARD_PAGE.CALENDAR);
+                  closeMobileDrawers();
+                }}
+              >
+                Calendar
+              </button>
+              <button
+                type="button"
+                className="mobile-drawer-item"
+                onClick={() => {
+                  openFaqDirect();
+                  closeMobileDrawers();
+                }}
+              >
+                {faqLabel}
+              </button>
+              {isStudent && (
+                <>
+                  <button
+                    type="button"
+                    className="mobile-drawer-item"
+                    onClick={() => {
+                      navigateTo(DASHBOARD_PAGE.STARRED);
+                      closeMobileDrawers();
+                    }}
+                  >
+                    Starred
+                  </button>
+                  <button
+                    type="button"
+                    className="mobile-drawer-item"
+                    onClick={() => {
+                      navigateTo(DASHBOARD_PAGE.REMINDERS);
+                      closeMobileDrawers();
+                    }}
+                  >
+                    Reminders
+                  </button>
+                </>
+              )}
+              {canCreateGlobalPost && (
+                <button
+                  type="button"
+                  className="mobile-drawer-item"
+                  onClick={() => {
+                    setComposeOpen(true);
+                    setIsError(false);
+                    setStatus("");
+                    closeMobileDrawers();
+                  }}
+                >
+                  New Post
+                </button>
+              )}
+              <button
+                type="button"
+                className="mobile-drawer-item"
+                onClick={() => {
+                  navigateTo(DASHBOARD_PAGE.PROFILE);
+                  closeMobileDrawers();
+                }}
+              >
+                Profile
+              </button>
+              <button
+                type="button"
+                className="mobile-drawer-item"
+                onClick={() => {
+                  toggleTheme();
+                  closeMobileDrawers();
+                }}
+              >
+                {theme === "dark" ? "Light Mode" : "Dark Mode"}
+              </button>
+              <button
+                type="button"
+                className="mobile-drawer-item danger"
+                onClick={() => {
+                  handleLogout();
+                  closeMobileDrawers();
+                }}
+              >
+                Logout
+              </button>
+            </nav>
+          </aside>
+
+          <aside className={`mobile-drawer right ${mobileSearchOpen ? "open" : ""}`} aria-hidden={!mobileSearchOpen}>
+            <div className="mobile-drawer-header">
+              <p className="mobile-drawer-title">Approved Posters</p>
+              <button
+                type="button"
+                className="ghost-btn icon-btn"
+                onClick={closeMobileDrawers}
+                aria-label="Close search"
+              >
+                Close
+              </button>
+            </div>
+            <div className="author-panel">
+              <div className="author-search">
+                <span aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M11 4a7 7 0 1 0 4.24 12.56l3.6 3.6a1 1 0 0 0 1.42-1.42l-3.6-3.6A7 7 0 0 0 11 4z" />
+                  </svg>
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search approved posters"
+                  name="authorSearchMobile"
+                  value={authorSearch}
+                  onChange={(event) => setAuthorSearch(event.target.value)}
+                />
+              </div>
+              <div className="author-chips" role="group" aria-label="Filter approved posters by role">
+                <button
+                  type="button"
+                  className={`chip-btn ${authorRoleFilter === "all" ? "active" : ""}`}
+                  onClick={() => setAuthorRoleFilter("all")}
+                  aria-pressed={authorRoleFilter === "all"}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={`chip-btn ${authorRoleFilter === "faculty" ? "active" : ""}`}
+                  onClick={() => setAuthorRoleFilter("faculty")}
+                  aria-pressed={authorRoleFilter === "faculty"}
+                >
+                  Faculty
+                </button>
+                <button
+                  type="button"
+                  className={`chip-btn ${authorRoleFilter === "admin" ? "active" : ""}`}
+                  onClick={() => setAuthorRoleFilter("admin")}
+                  aria-pressed={authorRoleFilter === "admin"}
+                >
+                  Admin
+                </button>
+              </div>
+              <div className="author-list">
+                <button
+                  type="button"
+                  className={`author-item ${selectedAuthorUid ? "" : "active"}`}
+                  onClick={() => {
+                    clearAuthorFilter();
+                    closeMobileDrawers();
+                  }}
+                >
+                  <span className="author-avatar">All</span>
+                  <div>
+                    <p className="author-name">All Approved Posters</p>
+                    <p className="author-meta">Show everything</p>
+                  </div>
+                </button>
+                {authorsLoading && <p className="hint">Loading approved posters...</p>}
+                {!authorsLoading && filteredAuthors.length === 0 && (
+                  <p className="hint">No approved posters found.</p>
+                )}
+                {!authorsLoading &&
+                  filteredAuthors.map((author) => (
+                    <button
+                      key={author.uid}
+                      type="button"
+                      className={`author-item ${selectedAuthorUid === author.uid ? "active" : ""}`}
+                      onClick={() => {
+                        selectAuthor(author);
+                        closeMobileDrawers();
+                      }}
+                    >
+                      <span className="avatar small">{getInitials(author.name || author.email)}</span>
+                      <div>
+                        <p className="author-name">{author.name || author.email}</p>
+                        <p className="author-meta">
+                          {author.department || "Department"} · {author.role || "faculty"}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          </aside>
+
           <aside className={`sidebar-rail ${sidebarPinned ? "pinned" : ""}`}>
             <div className="rail-head">
               <button
@@ -2066,7 +2751,7 @@ export default function App() {
               <button
                 type="button"
                 className={dashboardPage === DASHBOARD_PAGE.FAQ ? "rail-btn active" : "rail-btn"}
-                onClick={() => navigateTo(DASHBOARD_PAGE.FAQ)}
+                onClick={openFaqDirect}
                 aria-label={faqLabel}
                 title={faqLabel}
               >
@@ -2123,16 +2808,97 @@ export default function App() {
               )}
             </nav>
             <div className="rail-footer">
-              <button
-                type="button"
-                className={dashboardPage === DASHBOARD_PAGE.PROFILE ? "rail-btn active" : "rail-btn"}
-                onClick={() => navigateTo(DASHBOARD_PAGE.PROFILE)}
-                aria-label="Profile"
-                title="Profile"
-              >
-                <span className="avatar small">{getInitials(userProfile?.name || email)}</span>
-                <span className="rail-label">{profileLabel}</span>
-              </button>
+              <div className="rail-footer-menu" ref={profileMenuRef}>
+                <button
+                  type="button"
+                  className={dashboardPage === DASHBOARD_PAGE.PROFILE ? "rail-btn active" : "rail-btn"}
+                  onClick={() => setProfileMenuOpen((prev) => !prev)}
+                  aria-label="Profile menu"
+                  aria-haspopup="menu"
+                  aria-expanded={profileMenuOpen}
+                  title="Profile menu"
+                >
+                  <span className="avatar small">{getInitials(userProfile?.name || email)}</span>
+                  <span className="rail-label">{profileLabel}</span>
+                  <span className="rail-menu-dots" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" role="presentation">
+                      <circle cx="12" cy="5" r="2" />
+                      <circle cx="12" cy="12" r="2" />
+                      <circle cx="12" cy="19" r="2" />
+                    </svg>
+                  </span>
+                </button>
+                {profileMenuOpen && (
+                  <div className="rail-profile-menu" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        navigateTo(DASHBOARD_PAGE.PROFILE);
+                        setProfileMenuOpen(false);
+                      }}
+                    >
+                      <span className="menu-item-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" role="presentation">
+                          <path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4z" />
+                          <path d="M4 20a8 8 0 0 1 16 0" />
+                        </svg>
+                      </span>
+                      Profile
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        toggleTheme();
+                        setProfileMenuOpen(false);
+                      }}
+                    >
+                      <span className="menu-item-icon" aria-hidden="true">
+                        {theme === "dark" ? (
+                          <svg viewBox="0 0 24 24" role="presentation">
+                            <path d="M12 4a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0V5a1 1 0 0 1 1-1z" />
+                            <path d="M12 17a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1z" />
+                            <path d="M4 12a1 1 0 0 1 1-1h2a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1z" />
+                            <path d="M17 12a1 1 0 0 1 1-1h2a1 1 0 1 1 0 2h-2a1 1 0 0 1-1-1z" />
+                            <path d="M6.34 6.34a1 1 0 0 1 1.42 0l1.42 1.42a1 1 0 1 1-1.42 1.42L6.34 7.76a1 1 0 0 1 0-1.42z" />
+                            <path d="M15.82 15.82a1 1 0 0 1 1.42 0l1.42 1.42a1 1 0 1 1-1.42 1.42l-1.42-1.42a1 1 0 0 1 0-1.42z" />
+                            <path d="M17.66 6.34a1 1 0 0 1 0 1.42l-1.42 1.42a1 1 0 1 1-1.42-1.42l1.42-1.42a1 1 0 0 1 1.42 0z" />
+                            <path d="M8.18 15.82a1 1 0 0 1 0 1.42l-1.42 1.42a1 1 0 1 1-1.42-1.42l1.42-1.42a1 1 0 0 1 1.42 0z" />
+                            <circle cx="12" cy="12" r="4" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" role="presentation">
+                            <path d="M20.3 15.3A8 8 0 1 1 8.7 3.7a7 7 0 1 0 11.6 11.6z" />
+                          </svg>
+                        )}
+                      </span>
+                      {theme === "dark" ? "Light Mode" : "Dark Mode"}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="danger"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        handleLogout();
+                      }}
+                    >
+                      <span className="menu-item-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" role="presentation">
+                          <path d="M15 6h-3a1 1 0 0 0-1 1v2" />
+                          <path d="M11 15v2a1 1 0 0 0 1 1h3" />
+                          <path d="M10 12h10" />
+                          <path d="m17 9 3 3-3 3" />
+                          <path d="M5 4h6a2 2 0 0 1 2 2" />
+                          <path d="M13 18a2 2 0 0 1-2 2H5" />
+                        </svg>
+                      </span>
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </aside>
           <aside className="sidebar">
@@ -2172,7 +2938,7 @@ export default function App() {
                   </button>
                 )}
                 <button type="button" onClick={toggleTheme}>
-                  Switch Background
+                  {theme === "dark" ? "Light Mode" : "Dark Mode"}
                 </button>
                 <button type="button" className="danger" onClick={handleLogout}>
                   Logout
@@ -2209,7 +2975,7 @@ export default function App() {
               <button
                 type="button"
                 className={`nav-btn ${dashboardPage === DASHBOARD_PAGE.FAQ ? "active" : ""}`}
-                onClick={() => navigateTo(DASHBOARD_PAGE.FAQ)}
+                onClick={openFaqDirect}
               >
                 <span className="nav-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" role="presentation">
@@ -2252,7 +3018,9 @@ export default function App() {
                 <h2>{pageTitle}</h2>
                 <p className="description">
                   {dashboardPage === DASHBOARD_PAGE.HOME &&
-                    "Choose a department to see notices, events, and deadlines."}
+                    (isStudent
+                      ? "Your department feed is ready below."
+                      : "Choose a department to see notices, events, and deadlines.")}
                   {dashboardPage === DASHBOARD_PAGE.DEPARTMENT &&
                     "Stay updated with verified posts from your department."}
                   {dashboardPage === DASHBOARD_PAGE.CALENDAR &&
@@ -2279,8 +3047,12 @@ export default function App() {
                     Back to Departments
                   </button>
                 )}
-                {dashboardPage === DASHBOARD_PAGE.CALENDAR && (
-                  <select value={selectedBoardId} onChange={handleBoardSelect}>
+                {dashboardPage === DASHBOARD_PAGE.CALENDAR && !isStudent && (
+                  <select
+                    name="calendarBoard"
+                    value={selectedBoardId}
+                    onChange={handleBoardSelect}
+                  >
                     {BOARDS.map((board) => (
                       <option key={board.id} value={board.id}>
                         {board.shortName}
@@ -2297,9 +3069,12 @@ export default function App() {
               </p>
             )}
 
-            {dashboardPage === DASHBOARD_PAGE.HOME && (
+            {dashboardPage === DASHBOARD_PAGE.HOME && !isStudent && (
               <div className="branch-grid">
-                {BOARDS.map((board) => (
+                {visibleBoards.length === 0 && (
+                  <p className="hint">Your department is not set. Contact an admin to update your profile.</p>
+                )}
+                {visibleBoards.map((board) => (
                   <button
                     key={board.id}
                     className="branch-card"
@@ -2317,6 +3092,11 @@ export default function App() {
                   </button>
                 ))}
               </div>
+            )}
+            {dashboardPage === DASHBOARD_PAGE.HOME && isStudent && !studentBoardId && (
+              <section className="panel-card">
+                <p className="hint">Your department is not set. Contact an admin to update your profile.</p>
+              </section>
             )}
 
             {dashboardPage === DASHBOARD_PAGE.CALENDAR && (
@@ -2388,16 +3168,27 @@ export default function App() {
                       : "Select a date"}
                   </h3>
                   {selectedDayEvents.length === 0 && <p className="hint">No events or deadlines selected.</p>}
-                  {selectedDayEvents.map((eventItem) => (
-                    <article key={`${eventItem.id}-event`} className="event-card">
+                  {selectedDayEvents.map((eventItem, index) => (
+                    <button
+                      key={`${eventItem.id}-${eventItem.dateType}-${index}`}
+                      type="button"
+                      className="event-card"
+                      onClick={() => {
+                        const post = calendarPostMap.get(eventItem.id);
+                        if (post) {
+                          openPostPreview(post);
+                        }
+                      }}
+                    >
                       <div>
                         <h4>{eventItem.title}</h4>
                         <p className="event-meta">
-                          {eventItem.boardName} - {eventItem.type}
+                          {eventItem.boardName} · {eventItem.type} ·{" "}
+                          {eventItem.dateType === "deadline" ? "Deadline" : "Event date"}
                         </p>
                       </div>
                       <span className={`event-chip ${eventItem.priority}`}>{eventItem.priority}</span>
-                    </article>
+                    </button>
                   ))}
                 </section>
               </div>
@@ -2409,20 +3200,42 @@ export default function App() {
                   <h3>{isStudent ? "Ask a Question" : "Student Questions"}</h3>
                   {isStudent ? (
                     <form className="faq-form" onSubmit={handleFaqSubmit}>
-                      <label>
-                        Send to
-                        <select
-                          value={faqDraft.recipient}
-                          onChange={(event) => setFaqDraft((prev) => ({ ...prev, recipient: event.target.value }))}
-                        >
-                          {FAQ_RECIPIENTS.map((recipient) => (
-                            <option key={recipient} value={recipient}>
-                              {recipient}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      {faqDraft.recipientType === "author" ? (
+                        <div className="faq-recipient-lock">
+                          <label>Send to</label>
+                          <div className="recipient-pill">
+                            {faqDraft.recipientName ||
+                              faqDraft.recipientEmail ||
+                              "Post author"}
+                          </div>
+                        </div>
+                      ) : (
+                        <label>
+                          Send to
+                          <select
+                            name="faqRecipient"
+                            value={faqDraft.recipient}
+                            onChange={(event) =>
+                              setFaqDraft((prev) => ({
+                                ...prev,
+                                recipient: event.target.value,
+                                recipientType: "group",
+                                recipientUid: "",
+                                recipientName: "",
+                                recipientEmail: "",
+                              }))
+                            }
+                          >
+                            {FAQ_RECIPIENTS.map((recipient) => (
+                              <option key={recipient} value={recipient}>
+                                {recipient}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <textarea
+                        name="faqQuestion"
                         placeholder="Write your question..."
                         value={faqDraft.question}
                         onChange={(event) => setFaqDraft((prev) => ({ ...prev, question: event.target.value }))}
@@ -2448,13 +3261,19 @@ export default function App() {
                     const statusText = item.status || "Pending";
                     const askedByLabel = item.askedByName || item.askedByEmail || "Student";
                     const repliedByLabel = item.repliedByName || item.repliedByEmail || "Faculty";
+                    const recipientLabel =
+                      item.recipientType === "author"
+                        ? item.recipientName || item.recipientEmail || "Post author"
+                        : item.recipient || "Faculty";
+                    const canReplyThis =
+                      canReplyFaq || (item.recipientType === "author" && item.recipientUid === authUser?.uid);
                     return (
                       <article key={item.id} className="faq-item">
                         <p className="faq-question">{item.question}</p>
                         {isStudent ? (
                           <>
                             <p className="faq-meta">
-                              To: {item.recipient || "Faculty"} · Status: {statusText}
+                              To: {recipientLabel} · Status: {statusText}
                             </p>
                             <p className="faq-meta">Asked: {formatTimestamp(item.createdAt)}</p>
                             {item.replyText && (
@@ -2473,7 +3292,7 @@ export default function App() {
                               {item.askedByYear ? ` · Year ${item.askedByYear}` : ""}
                             </p>
                             <p className="faq-meta">
-                              To: {item.recipient || "Faculty"} · Status: {statusText}
+                              To: {recipientLabel} · Status: {statusText}
                             </p>
                             <p className="faq-meta">Asked: {formatTimestamp(item.createdAt)}</p>
                             {item.replyText ? (
@@ -2483,9 +3302,10 @@ export default function App() {
                                 {item.repliedAt && <p className="faq-meta">Replied: {formatTimestamp(item.repliedAt)}</p>}
                               </div>
                             ) : (
-                              canReplyFaq && (
+                              canReplyThis && (
                                 <div className="faq-reply">
                                   <textarea
+                                    name={`faqReply-${item.id}`}
                                     placeholder="Write a reply..."
                                     value={faqReplyDrafts[item.id] || ""}
                                     onChange={(event) =>
@@ -2601,7 +3421,7 @@ export default function App() {
                                   />
                                 </div>
                               )}
-                              <p>{post.content}</p>
+                              {renderPostBody(post, { stopPropagation: true })}
                               <div className="post-actions">
                                 <button
                                   className="action-btn"
@@ -2703,7 +3523,7 @@ export default function App() {
                               />
                             </div>
                           )}
-                          <p>{post.content}</p>
+                          {renderPostBody(post, { stopPropagation: true })}
                         </article>
                       );
                     })}
@@ -2740,7 +3560,7 @@ export default function App() {
               </section>
             )}
 
-            {dashboardPage === DASHBOARD_PAGE.DEPARTMENT && (
+            {showDepartmentFeed && (
               <div className="department-page">
                 <div className="feed-tabs">
                   <button
@@ -2768,22 +3588,41 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="filters-panel">
-                  <input
-                    type="text"
-                    placeholder="Search posts..."
-                    value={searchTerm}
-                    onChange={(event) => setSearchTerm(event.target.value)}
-                  />
-                  <select value={filterType} onChange={(event) => setFilterType(event.target.value)}>
-                    <option value="all">All Types</option>
+              <div className="filters-panel">
+                <input
+                  type="text"
+                  placeholder="Search posts..."
+                  name="postSearch"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                />
+                {selectedAuthor && (
+                  <button
+                    type="button"
+                    className="ghost-btn compact-btn"
+                    onClick={clearAuthorFilter}
+                    title="Clear author filter"
+                  >
+                    Showing: {selectedAuthor.name || selectedAuthor.email || "Author"} ✕
+                  </button>
+                )}
+                <select
+                  name="filterType"
+                  value={filterType}
+                  onChange={(event) => setFilterType(event.target.value)}
+                >
+                  <option value="all">All Types</option>
                     {POST_TYPES.map((type) => (
                       <option key={type} value={type}>
                         {type}
                       </option>
                     ))}
                   </select>
-                  <select value={filterPriority} onChange={(event) => setFilterPriority(event.target.value)}>
+                  <select
+                    name="filterPriority"
+                    value={filterPriority}
+                    onChange={(event) => setFilterPriority(event.target.value)}
+                  >
                     <option value="all">All Priority</option>
                     {PRIORITY_OPTIONS.map((priority) => (
                       <option key={priority} value={priority}>
@@ -2791,15 +3630,21 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                  <select value={filterYear} onChange={(event) => setFilterYear(event.target.value)}>
-                    <option value="all">All Years</option>
-                    <option value="1">1st Year</option>
-                    <option value="2">2nd Year</option>
-                    <option value="3">3rd Year</option>
-                    <option value="4">4th Year</option>
-                  </select>
+                  {!(isStudent && userProfile?.year) && (
+                    <select
+                      name="filterYear"
+                      value={filterYear}
+                      onChange={(event) => setFilterYear(event.target.value)}
+                    >
+                      <option value="all">All Years</option>
+                      <option value="1">1st Year</option>
+                      <option value="2">2nd Year</option>
+                      <option value="3">3rd Year</option>
+                      <option value="4">4th Year</option>
+                    </select>
+                  )}
                 </div>
-                {isAdminUser && (
+                {isAdminUser && activeTab === FEED_TAB.COMPLETED && (
                   <div className="filters-panel">
                     <button
                       type="button"
@@ -2864,7 +3709,7 @@ export default function App() {
                             </div>
                           )}
 
-                          <p>{post.content}</p>
+                          {renderPostBody(post, { stopPropagation: true })}
 
                           <div className="post-actions">
                             <button
@@ -2970,7 +3815,7 @@ export default function App() {
                             </div>
                           )}
 
-                          <p>{post.content}</p>
+                          {renderPostBody(post, { stopPropagation: true })}
 
                           <div className="post-actions">
                             <button
@@ -3032,7 +3877,7 @@ export default function App() {
                     {filteredPendingPosts.map((post) => (
                       <article key={post.id} className="post-card pending">
                         <h4>{post.title}</h4>
-                        <p>{post.content}</p>
+                        {renderPostBody(post)}
                         <footer className="pending-actions">
                           <button
                             type="button"
@@ -3075,64 +3920,96 @@ export default function App() {
             )}
           </div>
 
-          <aside className="right-panel">
-            <section className="right-card">
-              <div className="right-profile">
-                <span className="avatar large">{getInitials(userProfile?.name || email)}</span>
-                <div>
-                  <h4>{userProfile?.name || "Campus member"}</h4>
-                  <p className="right-meta">{userProfile?.role || "student"}</p>
-                  <p className="right-meta">{userProfile?.department || "Department not set"}</p>
-                </div>
-              </div>
-            </section>
+          <button
+            type="button"
+            className="right-panel-toggle"
+            onClick={() => setIsRightPanelOpen((prev) => !prev)}
+            aria-label={isRightPanelOpen ? "Collapse approved posters panel" : "Expand approved posters panel"}
+            title={isRightPanelOpen ? "Collapse approved posters panel" : "Expand approved posters panel"}
+          >
+            <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" />
+              <line x1="16.2" y1="16.2" x2="20" y2="20" />
+            </svg>
+          </button>
 
-            <section className="right-card">
-              <div className="right-card-head">
-                <h4>Upcoming</h4>
-                <span className="hint">{upcomingPosts.length} items</span>
+          <aside className={`right-panel ${isRightPanelOpen ? "open" : "collapsed"}`}>
+            <div className="author-panel">
+              <div className="author-search">
+                <span aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M11 4a7 7 0 1 0 4.24 12.56l3.6 3.6a1 1 0 0 0 1.42-1.42l-3.6-3.6A7 7 0 0 0 11 4z" />
+                  </svg>
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search approved posters"
+                  name="authorSearch"
+                  value={authorSearch}
+                  onChange={(event) => setAuthorSearch(event.target.value)}
+                />
               </div>
-              <div className="right-list">
-                {upcomingPosts.length === 0 && <p className="hint">No posts yet.</p>}
-                {upcomingPosts.map((post) => (
-                  <button
-                    key={post.id}
-                    type="button"
-                    className="right-item"
-                    onClick={() => openPostPreview(post)}
-                  >
-                    <span className="right-item-title">{post.title || "Untitled"}</span>
-                      <span className="right-item-meta">
-                      {post.deadlineAt
-                        ? `Deadline \u2022 ${formatTimestamp(post.deadlineAt)}`
-                        : `Posted \u2022 ${formatTimestamp(post.createdAt)}`}
-                      </span>
-                  </button>
-                ))}
+              <div className="author-chips" role="group" aria-label="Filter approved posters by role">
+                <button
+                  type="button"
+                  className={`chip-btn ${authorRoleFilter === "all" ? "active" : ""}`}
+                  onClick={() => setAuthorRoleFilter("all")}
+                  aria-pressed={authorRoleFilter === "all"}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={`chip-btn ${authorRoleFilter === "faculty" ? "active" : ""}`}
+                  onClick={() => setAuthorRoleFilter("faculty")}
+                  aria-pressed={authorRoleFilter === "faculty"}
+                >
+                  Faculty
+                </button>
+                <button
+                  type="button"
+                  className={`chip-btn ${authorRoleFilter === "admin" ? "active" : ""}`}
+                  onClick={() => setAuthorRoleFilter("admin")}
+                  aria-pressed={authorRoleFilter === "admin"}
+                >
+                  Admin
+                </button>
               </div>
-            </section>
-
-            <section className="right-card">
-              <h4>Quick stats</h4>
-              <div className="right-stat-grid">
-                <div className="right-stat">
-                  <p className="right-stat-label">Starred</p>
-                  <p className="right-stat-value">{starredPosts.length}</p>
-                </div>
-                <div className="right-stat">
-                  <p className="right-stat-label">Reminders</p>
-                  <p className="right-stat-value">{reminders.length}</p>
-                </div>
-                <div className="right-stat">
-                  <p className="right-stat-label">Posts</p>
-                  <p className="right-stat-value">{posts.length}</p>
-                </div>
-                <div className="right-stat">
-                  <p className="right-stat-label">Completed</p>
-                  <p className="right-stat-value">{completedPosts.length}</p>
-                </div>
+              <div className="author-list">
+                <button
+                  type="button"
+                  className={`author-item ${selectedAuthorUid ? "" : "active"}`}
+                  onClick={clearAuthorFilter}
+                >
+                  <span className="author-avatar">All</span>
+                  <div>
+                    <p className="author-name">All Approved Posters</p>
+                    <p className="author-meta">Show everything</p>
+                  </div>
+                </button>
+                {authorsLoading && <p className="hint">Loading approved posters...</p>}
+                {!authorsLoading && filteredAuthors.length === 0 && (
+                  <p className="hint">No approved posters found.</p>
+                )}
+                {!authorsLoading &&
+                  filteredAuthors.map((author) => (
+                    <button
+                      key={author.uid}
+                      type="button"
+                      className={`author-item ${selectedAuthorUid === author.uid ? "active" : ""}`}
+                      onClick={() => selectAuthor(author)}
+                    >
+                      <span className="avatar small">{getInitials(author.name || author.email)}</span>
+                      <div>
+                        <p className="author-name">{author.name || author.email}</p>
+                        <p className="author-meta">
+                          {author.department || "Department"} · {author.role || "faculty"}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
               </div>
-            </section>
+            </div>
           </aside>
         </section>
       )}
@@ -3144,6 +4021,7 @@ export default function App() {
             <p className="description">Choose a date and time for this reminder.</p>
             <input
               type="datetime-local"
+              name="reminderDate"
               value={reminderDraft.date}
               onChange={(event) => setReminderDraft((prev) => ({ ...prev, date: event.target.value }))}
             />
@@ -3174,16 +4052,19 @@ export default function App() {
             <input
               type="text"
               placeholder="Title"
+              name="editTitle"
               value={editForm.title}
               onChange={(event) => setEditForm((prev) => ({ ...prev, title: event.target.value }))}
             />
             <textarea
               placeholder="Write your content..."
+              name="editContent"
               value={editForm.content}
               onChange={(event) => setEditForm((prev) => ({ ...prev, content: event.target.value }))}
             />
             <div className="compose-grid">
               <select
+                name="editPriority"
                 value={editForm.priority}
                 onChange={(event) => setEditForm((prev) => ({ ...prev, priority: event.target.value }))}
               >
@@ -3195,6 +4076,7 @@ export default function App() {
               </select>
               <input
                 type="datetime-local"
+                name="editDeadline"
                 value={editForm.deadline}
                 onChange={(event) => setEditForm((prev) => ({ ...prev, deadline: event.target.value }))}
               />
@@ -3253,7 +4135,10 @@ export default function App() {
                   <span className="post-badge">{activePostType}</span>
                   <span className={`priority-badge ${activePostPriority}`}>{activePostPriority}</span>
                 </div>
-                <p className="post-view-content">{activePostContent}</p>
+                {renderPostBody(activePost, {
+                  contentClassName: "post-view-content",
+                  emptyFallback: "No additional details shared yet.",
+                })}
               </div>
               <footer className="post-view-footer">
                 <div className="post-view-actions">
@@ -3294,6 +4179,9 @@ export default function App() {
                   {activePost.deadlineAt && (
                     <span>Deadline: {formatTimestamp(activePost.deadlineAt)}</span>
                   )}
+                  {activePost.eventAt && (
+                    <span>Event: {formatTimestamp(activePost.eventAt)}</span>
+                  )}
                   {canModerate && readStatsByPost[activePost.id] && (
                     <span>
                       Read {readStatsByPost[activePost.id].readCount}/{
@@ -3317,12 +4205,14 @@ export default function App() {
             <input
               type="text"
               placeholder="Title"
+              name="postTitle"
               value={composeForm.title}
               onChange={(event) => setComposeForm((prev) => ({ ...prev, title: event.target.value }))}
             />
 
             <textarea
               placeholder="Write your content..."
+              name="postContent"
               value={composeForm.content}
               onChange={(event) => setComposeForm((prev) => ({ ...prev, content: event.target.value }))}
             />
@@ -3331,6 +4221,7 @@ export default function App() {
               Upload image
               <input
                 type="file"
+                name="postImage"
                 accept="image/*"
                 onChange={(event) => setComposeFile(event.target.files?.[0] || null)}
               />
@@ -3339,6 +4230,7 @@ export default function App() {
 
             <div className="compose-grid">
               <select
+                name="postTargetMode"
                 value={composeForm.targetMode}
                 onChange={(event) => setComposeForm((prev) => ({ ...prev, targetMode: event.target.value }))}
               >
@@ -3347,6 +4239,7 @@ export default function App() {
               </select>
 
               <select
+                name="postTargetBoard"
                 value={composeForm.targetBoardId}
                 onChange={(event) => setComposeForm((prev) => ({ ...prev, targetBoardId: event.target.value }))}
                 disabled={composeForm.targetMode === "all"}
@@ -3359,8 +4252,21 @@ export default function App() {
               </select>
 
               <select
+                name="postType"
                 value={composeForm.type}
-                onChange={(event) => setComposeForm((prev) => ({ ...prev, type: event.target.value }))}
+                onChange={(event) => {
+                  const nextType = event.target.value;
+                  setComposeForm((prev) => ({
+                    ...prev,
+                    type: nextType,
+                    eventDate:
+                      nextType === "event" ||
+                      nextType === "hackathon" ||
+                      nextType === "workshop"
+                        ? prev.eventDate
+                        : "",
+                  }));
+                }}
               >
                 {POST_TYPES.map((type) => (
                   <option key={type} value={type}>
@@ -3370,6 +4276,7 @@ export default function App() {
               </select>
 
               <select
+                name="postPriority"
                 value={composeForm.priority}
                 onChange={(event) => setComposeForm((prev) => ({ ...prev, priority: event.target.value }))}
               >
@@ -3381,6 +4288,7 @@ export default function App() {
               </select>
 
               <select
+                name="postTargetYear"
                 value={composeForm.targetYear}
                 onChange={(event) => setComposeForm((prev) => ({ ...prev, targetYear: event.target.value }))}
               >
@@ -3395,6 +4303,7 @@ export default function App() {
             <input
               type="text"
               placeholder="Optional link (https://...)"
+              name="postLink"
               value={composeForm.link}
               onChange={(event) => setComposeForm((prev) => ({ ...prev, link: event.target.value }))}
             />
@@ -3403,10 +4312,24 @@ export default function App() {
               Deadline (optional)
               <input
                 type="datetime-local"
+                name="postDeadline"
                 value={composeForm.deadline}
                 onChange={(event) => setComposeForm((prev) => ({ ...prev, deadline: event.target.value }))}
               />
             </label>
+            {(composeForm.type === "event" ||
+              composeForm.type === "hackathon" ||
+              composeForm.type === "workshop") && (
+              <label className="deadline-label">
+                Event date (optional)
+                <input
+                  type="datetime-local"
+                  name="postEventDate"
+                  value={composeForm.eventDate}
+                  onChange={(event) => setComposeForm((prev) => ({ ...prev, eventDate: event.target.value }))}
+                />
+              </label>
+            )}
 
             <div className="compose-actions">
               <button className="primary-btn" onClick={handleCreatePost} disabled={submittingPost} type="button">

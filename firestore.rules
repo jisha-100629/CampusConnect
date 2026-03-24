@@ -54,6 +54,11 @@ service cloud.firestore {
         currentUserDoc().data.authorApproved == true;
     }
 
+    function isPostAuthor(postId) {
+      return isInstitutionalUser() &&
+        get(/databases/$(database)/documents/posts/$(postId)).data.authorUid == request.auth.uid;
+    }
+
     function isValidBoard(boardId) {
       return boardId in ["cse", "cse-aiml", "ece", "eee", "it"];
     }
@@ -89,6 +94,10 @@ service cloud.firestore {
       ];
     }
 
+    function isValidFaqRecipientType(value) {
+      return value in ["group", "author"];
+    }
+
     function isValidFaqStatus(value) {
       return value in ["Pending", "Solved"];
     }
@@ -111,7 +120,9 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if isInstitutionalUser() && request.auth.uid == userId;
+      allow read: if isInstitutionalUser() && (
+        request.auth.uid == userId || resource.data.authorApproved == true
+      );
       allow create: if isInstitutionalUser()
         && request.auth.uid == userId
         && request.resource.data.uid == request.auth.uid
@@ -247,7 +258,8 @@ service cloud.firestore {
         (
           resource.data.askedByUid == request.auth.uid ||
           isAdmin() ||
-          isFacultyRecipient(resource.data.recipient)
+          isFacultyRecipient(resource.data.recipient) ||
+          (resource.data.recipientType == "author" && resource.data.recipientUid == request.auth.uid)
         );
 
       allow create: if isInstitutionalUser()
@@ -255,16 +267,35 @@ service cloud.firestore {
         && request.resource.data.askedByEmail == request.auth.token.email
         && request.resource.data.question is string
         && request.resource.data.recipient is string
-        && isValidFaqRecipient(request.resource.data.recipient)
+        && request.resource.data.recipientType is string
+        && isValidFaqRecipientType(request.resource.data.recipientType)
+        && (
+          (
+            request.resource.data.recipientType == "group" &&
+            isValidFaqRecipient(request.resource.data.recipient)
+          ) ||
+          (
+            request.resource.data.recipientType == "author" &&
+            request.resource.data.recipientUid is string &&
+            request.resource.data.recipientUid.size() > 0
+          )
+        )
         && isValidFaqStatus(request.resource.data.status);
 
       allow update: if isAdmin() || (
         isInstitutionalUser()
-        && isFacultyRecipient(resource.data.recipient)
+        && (
+          (resource.data.recipientType == "group" && isFacultyRecipient(resource.data.recipient)) ||
+          (resource.data.recipientType == "author" && resource.data.recipientUid == request.auth.uid)
+        )
         && request.resource.data.askedByUid == resource.data.askedByUid
         && request.resource.data.askedByEmail == resource.data.askedByEmail
         && request.resource.data.question == resource.data.question
         && request.resource.data.recipient == resource.data.recipient
+        && request.resource.data.recipientType == resource.data.recipientType
+        && request.resource.data.recipientUid == resource.data.recipientUid
+        && request.resource.data.recipientName == resource.data.recipientName
+        && request.resource.data.recipientEmail == resource.data.recipientEmail
         && isValidFaqStatus(request.resource.data.status)
       );
 
@@ -272,10 +303,11 @@ service cloud.firestore {
     }
 
     match /postReads/{readId} {
-      allow read: if isAdmin() || isFaculty() || (
-        isInstitutionalUser() &&
-        resource.data.viewerUid == request.auth.uid
-      );
+      allow read: if isAdmin() || isFaculty() ||
+        isPostAuthor(resource.data.postId) || (
+          isInstitutionalUser() &&
+          resource.data.viewerUid == request.auth.uid
+        );
 
       allow create: if isInstitutionalUser()
         && request.resource.data.viewerUid == request.auth.uid
@@ -289,7 +321,7 @@ service cloud.firestore {
         && request.resource.data.viewerEmail == request.auth.token.email
         && request.resource.data.postId == resource.data.postId
         && request.resource.data.boardId == resource.data.boardId;
-      allow delete: if false;
+      allow delete: if isAdmin() || isFaculty() || isPostAuthor(resource.data.postId);
     }
 
     match /auditLogs/{logId} {

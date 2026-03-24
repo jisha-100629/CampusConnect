@@ -1,0 +1,287 @@
+[debug] [2026-03-24T18:56:37.816Z] ----------------------------------------------------------------------
+[debug] [2026-03-24T18:56:37.819Z] Command:       C:\ACM\nodejs\node.exe C:\Users\srija\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting
+[debug] [2026-03-24T18:56:37.820Z] CLI Version:   15.8.0
+[debug] [2026-03-24T18:56:37.820Z] Platform:      win32
+[debug] [2026-03-24T18:56:37.820Z] Node Version:  v22.14.0
+[debug] [2026-03-24T18:56:37.820Z] Time:          Wed Mar 25 2026 00:26:37 GMT+0530 (India Standard Time)
+[debug] [2026-03-24T18:56:37.820Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-03-24T18:56:40.916Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-03-24T18:56:40.917Z] > authorizing via signed-in user (srijanimanneni.9799@gmail.com)
+[debug] [2026-03-24T18:56:40.917Z] [iam] checking project campusconnect-55cca for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-03-24T18:56:40.920Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:40.920Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:40.923Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions [none]
+[debug] [2026-03-24T18:56:40.923Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions  x-goog-user-project=campusconnect-55cca
+[debug] [2026-03-24T18:56:40.923Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-03-24T18:56:42.447Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions 200
+[debug] [2026-03-24T18:56:42.447Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-03-24T18:56:42.449Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:42.450Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:42.451Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca [none]
+[debug] [2026-03-24T18:56:42.978Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca 200
+[debug] [2026-03-24T18:56:42.978Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca {"projectId":"campusconnect-55cca","projectNumber":"882891881661","displayName":"CampusConnect","name":"projects/campusconnect-55cca","resources":{"hostingSite":"campusconnect-55cca"},"state":"ACTIVE","etag":"1_0db1cced-ac3f-41c2-8e00-b32327377e68"}
+[info] 
+[info] === Deploying to 'campusconnect-55cca'...
+[info] 
+[info] i  deploying hosting 
+[debug] [2026-03-24T18:56:42.981Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:42.981Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:42.981Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions [none]
+[debug] [2026-03-24T18:56:42.981Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions {"status":"CREATED","labels":{"deployment-tool":"cli-firebase"}}
+[debug] [2026-03-24T18:56:44.615Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions 200
+[debug] [2026-03-24T18:56:44.615Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions {"name":"projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2","status":"CREATED","config":{},"labels":{"deployment-tool":"cli-firebase"}}
+[info] i  hosting[campusconnect-55cca]: beginning deploy... 
+[info] i  hosting[campusconnect-55cca]: found 4 files in dist 
+[debug] [2026-03-24T18:56:44.639Z] [hosting] uploading with 200 concurrency
+[debug] [2026-03-24T18:56:44.660Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:44.660Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:44.661Z] [hosting] hash cache [ZGlzdA] stored for 4 files
+[debug] [2026-03-24T18:56:44.661Z] [hosting][hash queue][FINAL] {"max":18,"min":0,"avg":6.25,"active":0,"complete":4,"success":4,"errored":0,"retried":0,"total":4,"elapsed":21}
+[debug] [2026-03-24T18:56:44.662Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2:populateFiles [none]
+[debug] [2026-03-24T18:56:44.662Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2:populateFiles {"files":{"/firebase-messaging-sw.js":"13ae9f5b30138a0dc71877c2e738bb6bca2b227cae02dd3efdbe937fbe479ede","/index.html":"c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505","/assets/index-BU4GYU9u.css":"d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5","/assets/index-CTKYOJPy.js":"f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7"}}
+[debug] [2026-03-24T18:56:45.369Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2:populateFiles 200
+[debug] [2026-03-24T18:56:45.370Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2:populateFiles {"uploadRequiredHashes":["c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505","d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5","f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7"],"uploadUrl":"https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files"}
+[debug] [2026-03-24T18:56:45.371Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:45.372Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:45.372Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:45.373Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:45.374Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:45.374Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:45.375Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505 [none]
+[debug] [2026-03-24T18:56:45.375Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505 [stream]
+[debug] [2026-03-24T18:56:45.377Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5 [none]
+[debug] [2026-03-24T18:56:45.377Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5 [stream]
+[debug] [2026-03-24T18:56:45.378Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7 [none]
+[debug] [2026-03-24T18:56:45.379Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7 [stream]
+[debug] [2026-03-24T18:56:45.380Z] [hosting][populate queue][FINAL] {"max":715,"min":715,"avg":715,"active":0,"complete":1,"success":1,"errored":0,"retried":0,"total":1,"elapsed":721}
+[debug] [2026-03-24T18:56:45.381Z] [hosting] uploads queued: 3
+[info] i  hosting: uploading new files [0/3] (0%) 
+[debug] [2026-03-24T18:56:46.897Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5 200
+[debug] [2026-03-24T18:56:46.897Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5 [stream]
+[debug] [2026-03-24T18:56:47.318Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505 200
+[debug] [2026-03-24T18:56:47.318Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505 [stream]
+[debug] [2026-03-24T18:56:47.534Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7 200
+[debug] [2026-03-24T18:56:47.535Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/668fe8bbacf914d2/files/f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7 [stream]
+[debug] [2026-03-24T18:56:47.535Z] [hosting][upload queue][FINAL] {"max":2162,"min":1525,"avg":1878.3333333333333,"active":0,"complete":3,"success":3,"errored":0,"retried":0,"total":3,"elapsed":2165}
+[info] i  hosting: upload complete 
+[info] +  hosting[campusconnect-55cca]: file upload complete 
+[debug] [2026-03-24T18:56:47.535Z] [hosting] deploy completed after 2914ms
+[debug] [2026-03-24T18:56:47.536Z] [
+  {
+    "config": {
+      "public": "dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "site": "campusconnect-55cca"
+    },
+    "version": "projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2"
+  }
+]
+[info] i  hosting[campusconnect-55cca]: finalizing version... 
+[debug] [2026-03-24T18:56:47.538Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:47.538Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:47.539Z] >>> [apiv2][query] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/668fe8bbacf914d2 updateMask=status%2Cconfig
+[debug] [2026-03-24T18:56:47.539Z] >>> [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/668fe8bbacf914d2 {"status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}]}}
+[debug] [2026-03-24T18:56:48.294Z] <<< [apiv2][status] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/668fe8bbacf914d2 200
+[debug] [2026-03-24T18:56:48.294Z] <<< [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/668fe8bbacf914d2 {"name":"projects/882891881661/sites/campusconnect-55cca/versions/668fe8bbacf914d2","status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-03-24T18:56:44.384601Z","createUser":{"email":"srijanimanneni.9799@gmail.com"},"finalizeTime":"2026-03-24T18:56:48.557755Z","finalizeUser":{"email":"srijanimanneni.9799@gmail.com"}}
+[debug] [2026-03-24T18:56:48.294Z] [hosting] finalized version for campusconnect-55cca:[object Object]
+[info] +  hosting[campusconnect-55cca]: version finalized 
+[info] i  hosting[campusconnect-55cca]: releasing new version... 
+[debug] [2026-03-24T18:56:48.295Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:48.295Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:56:48.295Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases versionName=projects%2F882891881661%2Fsites%2Fcampusconnect-55cca%2Fversions%2F668fe8bbacf914d2
+[debug] [2026-03-24T18:56:48.295Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases {}
+[debug] [2026-03-24T18:56:49.180Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases 200
+[debug] [2026-03-24T18:56:59.260Z] ----------------------------------------------------------------------
+[debug] [2026-03-24T18:56:59.262Z] Command:       C:\ACM\nodejs\node.exe C:\Users\srija\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting
+[debug] [2026-03-24T18:56:59.262Z] CLI Version:   15.8.0
+[debug] [2026-03-24T18:56:59.262Z] Platform:      win32
+[debug] [2026-03-24T18:56:59.262Z] Node Version:  v22.14.0
+[debug] [2026-03-24T18:56:59.263Z] Time:          Wed Mar 25 2026 00:26:59 GMT+0530 (India Standard Time)
+[debug] [2026-03-24T18:56:59.263Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-03-24T18:57:00.659Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-03-24T18:57:00.661Z] > authorizing via signed-in user (srijanimanneni.9799@gmail.com)
+[debug] [2026-03-24T18:57:00.661Z] [iam] checking project campusconnect-55cca for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-03-24T18:57:00.663Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:00.663Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:00.665Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions [none]
+[debug] [2026-03-24T18:57:00.665Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions  x-goog-user-project=campusconnect-55cca
+[debug] [2026-03-24T18:57:00.665Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-03-24T18:57:02.162Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions 200
+[debug] [2026-03-24T18:57:02.162Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-03-24T18:57:02.163Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:02.164Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:02.164Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca [none]
+[debug] [2026-03-24T18:57:02.649Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca 200
+[debug] [2026-03-24T18:57:02.649Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca {"projectId":"campusconnect-55cca","projectNumber":"882891881661","displayName":"CampusConnect","name":"projects/campusconnect-55cca","resources":{"hostingSite":"campusconnect-55cca"},"state":"ACTIVE","etag":"1_0db1cced-ac3f-41c2-8e00-b32327377e68"}
+[info] 
+[info] === Deploying to 'campusconnect-55cca'...
+[info] 
+[info] i  deploying hosting 
+[debug] [2026-03-24T18:57:02.657Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:02.658Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:02.658Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions [none]
+[debug] [2026-03-24T18:57:02.658Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions {"status":"CREATED","labels":{"deployment-tool":"cli-firebase"}}
+[debug] [2026-03-24T18:57:04.228Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions 200
+[debug] [2026-03-24T18:57:04.228Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions {"name":"projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472","status":"CREATED","config":{},"labels":{"deployment-tool":"cli-firebase"}}
+[info] i  hosting[campusconnect-55cca]: beginning deploy... 
+[info] i  hosting[campusconnect-55cca]: found 4 files in dist 
+[debug] [2026-03-24T18:57:04.246Z] [hosting] uploading with 200 concurrency
+[debug] [2026-03-24T18:57:04.248Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:04.248Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:04.249Z] [hosting] hash cache [ZGlzdA] stored for 4 files
+[debug] [2026-03-24T18:57:04.249Z] [hosting][hash queue][FINAL] {"max":1,"min":1,"avg":1,"active":0,"complete":4,"success":4,"errored":0,"retried":0,"total":4,"elapsed":2}
+[debug] [2026-03-24T18:57:04.249Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472:populateFiles [none]
+[debug] [2026-03-24T18:57:04.250Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472:populateFiles {"files":{"/index.html":"c246c8bd717433e4b2ec57b4120f5eab8c1f1e151d0f9078aa89ba7e4eab5505","/firebase-messaging-sw.js":"13ae9f5b30138a0dc71877c2e738bb6bca2b227cae02dd3efdbe937fbe479ede","/assets/index-CTKYOJPy.js":"f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7","/assets/index-BU4GYU9u.css":"d0b46ad5da6d55cbb892567c96c6d1f854eaaf66fc9e750b3992dc793f1451f5"}}
+[debug] [2026-03-24T18:57:04.963Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472:populateFiles 200
+[debug] [2026-03-24T18:57:04.963Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472:populateFiles {"uploadUrl":"https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/557df6a06d05b472/files"}
+[debug] [2026-03-24T18:57:04.963Z] [hosting][populate queue][FINAL] {"max":715,"min":715,"avg":715,"active":0,"complete":1,"success":1,"errored":0,"retried":0,"total":1,"elapsed":715}
+[debug] [2026-03-24T18:57:04.964Z] [hosting] uploads queued: 0
+[debug] [2026-03-24T18:57:04.964Z] [hosting][upload queue][FINAL] {"max":0,"min":9999999999,"avg":0,"active":0,"complete":0,"success":0,"errored":0,"retried":0,"total":0,"elapsed":1774378624964}
+[info] i  hosting: upload complete 
+[info] +  hosting[campusconnect-55cca]: file upload complete 
+[debug] [2026-03-24T18:57:04.966Z] [hosting] deploy completed after 733ms
+[debug] [2026-03-24T18:57:04.966Z] [
+  {
+    "config": {
+      "public": "dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "site": "campusconnect-55cca"
+    },
+    "version": "projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472"
+  }
+]
+[info] i  hosting[campusconnect-55cca]: finalizing version... 
+[debug] [2026-03-24T18:57:04.970Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:04.970Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:04.971Z] >>> [apiv2][query] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/557df6a06d05b472 updateMask=status%2Cconfig
+[debug] [2026-03-24T18:57:04.971Z] >>> [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/557df6a06d05b472 {"status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}]}}
+[debug] [2026-03-24T18:57:05.781Z] <<< [apiv2][status] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/557df6a06d05b472 200
+[debug] [2026-03-24T18:57:05.781Z] <<< [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/557df6a06d05b472 {"name":"projects/882891881661/sites/campusconnect-55cca/versions/557df6a06d05b472","status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-03-24T18:57:04.054Z","createUser":{"email":"srijanimanneni.9799@gmail.com"},"finalizeTime":"2026-03-24T18:57:06.077165Z","finalizeUser":{"email":"srijanimanneni.9799@gmail.com"}}
+[debug] [2026-03-24T18:57:05.781Z] [hosting] finalized version for campusconnect-55cca:[object Object]
+[info] +  hosting[campusconnect-55cca]: version finalized 
+[info] i  hosting[campusconnect-55cca]: releasing new version... 
+[debug] [2026-03-24T18:57:05.782Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:05.782Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:57:05.782Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases versionName=projects%2F882891881661%2Fsites%2Fcampusconnect-55cca%2Fversions%2F557df6a06d05b472
+[debug] [2026-03-24T18:57:05.782Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases {}
+[debug] [2026-03-24T18:57:06.565Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases 200
+[debug] [2026-03-24T18:59:33.689Z] ----------------------------------------------------------------------
+[debug] [2026-03-24T18:59:33.694Z] Command:       C:\ACM\nodejs\node.exe C:\Users\srija\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting
+[debug] [2026-03-24T18:59:33.694Z] CLI Version:   15.8.0
+[debug] [2026-03-24T18:59:33.695Z] Platform:      win32
+[debug] [2026-03-24T18:59:33.695Z] Node Version:  v22.14.0
+[debug] [2026-03-24T18:59:33.695Z] Time:          Wed Mar 25 2026 00:29:33 GMT+0530 (India Standard Time)
+[debug] [2026-03-24T18:59:33.695Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-03-24T18:59:36.102Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-03-24T18:59:36.104Z] > authorizing via signed-in user (srijanimanneni.9799@gmail.com)
+[debug] [2026-03-24T18:59:36.104Z] [iam] checking project campusconnect-55cca for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-03-24T18:59:36.106Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:36.107Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:36.108Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions [none]
+[debug] [2026-03-24T18:59:36.109Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions  x-goog-user-project=campusconnect-55cca
+[debug] [2026-03-24T18:59:36.109Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-03-24T18:59:37.592Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions 200
+[debug] [2026-03-24T18:59:37.592Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/campusconnect-55cca:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-03-24T18:59:37.593Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:37.593Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:37.593Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca [none]
+[debug] [2026-03-24T18:59:38.307Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca 200
+[debug] [2026-03-24T18:59:38.307Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/campusconnect-55cca {"projectId":"campusconnect-55cca","projectNumber":"882891881661","displayName":"CampusConnect","name":"projects/campusconnect-55cca","resources":{"hostingSite":"campusconnect-55cca"},"state":"ACTIVE","etag":"1_0db1cced-ac3f-41c2-8e00-b32327377e68"}
+[info] 
+[info] === Deploying to 'campusconnect-55cca'...
+[info] 
+[info] i  deploying hosting 
+[debug] [2026-03-24T18:59:38.312Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:38.313Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:38.313Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions [none]
+[debug] [2026-03-24T18:59:38.313Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions {"status":"CREATED","labels":{"deployment-tool":"cli-firebase"}}
+[debug] [2026-03-24T18:59:39.912Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions 200
+[debug] [2026-03-24T18:59:39.912Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions {"name":"projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e","status":"CREATED","config":{},"labels":{"deployment-tool":"cli-firebase"}}
+[info] i  hosting[campusconnect-55cca]: beginning deploy... 
+[info] i  hosting[campusconnect-55cca]: found 4 files in dist 
+[debug] [2026-03-24T18:59:39.929Z] [hosting] uploading with 200 concurrency
+[debug] [2026-03-24T18:59:39.961Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:39.961Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:39.962Z] [hosting] hash cache [ZGlzdA] stored for 4 files
+[debug] [2026-03-24T18:59:39.962Z] [hosting][hash queue][FINAL] {"max":29,"min":0,"avg":9.25,"active":0,"complete":4,"success":4,"errored":0,"retried":0,"total":4,"elapsed":31}
+[debug] [2026-03-24T18:59:39.963Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e:populateFiles [none]
+[debug] [2026-03-24T18:59:39.963Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e:populateFiles {"files":{"/firebase-messaging-sw.js":"13ae9f5b30138a0dc71877c2e738bb6bca2b227cae02dd3efdbe937fbe479ede","/index.html":"fe6cb067637f765a04d4128cf3f464747aaef0fa93baa1871b9ed7d63e2ef25a","/assets/index-DPMAUrwI.css":"6b82fd2cd47c661d527945ce2440fe488e4f92be96aba5b08683da5b05053658","/assets/index-DNW7WyKx.js":"f540b555a255421e86e231dfe7cef882dc552e66575cd1cc2ca7d0a60b52fab7"}}
+[debug] [2026-03-24T18:59:40.804Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e:populateFiles 200
+[debug] [2026-03-24T18:59:40.804Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e:populateFiles {"uploadRequiredHashes":["fe6cb067637f765a04d4128cf3f464747aaef0fa93baa1871b9ed7d63e2ef25a","6b82fd2cd47c661d527945ce2440fe488e4f92be96aba5b08683da5b05053658"],"uploadUrl":"https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files"}
+[debug] [2026-03-24T18:59:40.805Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:40.805Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:40.806Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:40.806Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:40.806Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/fe6cb067637f765a04d4128cf3f464747aaef0fa93baa1871b9ed7d63e2ef25a [none]
+[debug] [2026-03-24T18:59:40.806Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/fe6cb067637f765a04d4128cf3f464747aaef0fa93baa1871b9ed7d63e2ef25a [stream]
+[debug] [2026-03-24T18:59:40.808Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/6b82fd2cd47c661d527945ce2440fe488e4f92be96aba5b08683da5b05053658 [none]
+[debug] [2026-03-24T18:59:40.808Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/6b82fd2cd47c661d527945ce2440fe488e4f92be96aba5b08683da5b05053658 [stream]
+[debug] [2026-03-24T18:59:40.809Z] [hosting][populate queue][FINAL] {"max":845,"min":845,"avg":845,"active":0,"complete":1,"success":1,"errored":0,"retried":0,"total":1,"elapsed":848}
+[debug] [2026-03-24T18:59:40.810Z] [hosting] uploads queued: 2
+[info] i  hosting: uploading new files [0/2] (0%) 
+[debug] [2026-03-24T18:59:42.736Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/6b82fd2cd47c661d527945ce2440fe488e4f92be96aba5b08683da5b05053658 200
+[debug] [2026-03-24T18:59:42.736Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/6b82fd2cd47c661d527945ce2440fe488e4f92be96aba5b08683da5b05053658 [stream]
+[debug] [2026-03-24T18:59:43.591Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/fe6cb067637f765a04d4128cf3f464747aaef0fa93baa1871b9ed7d63e2ef25a 200
+[debug] [2026-03-24T18:59:43.591Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e/files/fe6cb067637f765a04d4128cf3f464747aaef0fa93baa1871b9ed7d63e2ef25a [stream]
+[debug] [2026-03-24T18:59:43.592Z] [hosting][upload queue][FINAL] {"max":2788,"min":1931,"avg":2359.5,"active":0,"complete":2,"success":2,"errored":0,"retried":0,"total":2,"elapsed":2788}
+[info] i  hosting: upload complete 
+[info] +  hosting[campusconnect-55cca]: file upload complete 
+[debug] [2026-03-24T18:59:43.592Z] [hosting] deploy completed after 3677ms
+[debug] [2026-03-24T18:59:43.592Z] [
+  {
+    "config": {
+      "public": "dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "site": "campusconnect-55cca"
+    },
+    "version": "projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e"
+  }
+]
+[info] i  hosting[campusconnect-55cca]: finalizing version... 
+[debug] [2026-03-24T18:59:43.595Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:43.595Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:43.596Z] >>> [apiv2][query] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e updateMask=status%2Cconfig
+[debug] [2026-03-24T18:59:43.596Z] >>> [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e {"status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}]}}
+[debug] [2026-03-24T18:59:44.405Z] <<< [apiv2][status] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e 200
+[debug] [2026-03-24T18:59:44.405Z] <<< [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e {"name":"projects/882891881661/sites/campusconnect-55cca/versions/1bdf4a1cebd7b83e","status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-03-24T18:59:39.740664Z","createUser":{"email":"srijanimanneni.9799@gmail.com"},"finalizeTime":"2026-03-24T18:59:44.694099Z","finalizeUser":{"email":"srijanimanneni.9799@gmail.com"}}
+[debug] [2026-03-24T18:59:44.405Z] [hosting] finalized version for campusconnect-55cca:[object Object]
+[info] +  hosting[campusconnect-55cca]: version finalized 
+[info] i  hosting[campusconnect-55cca]: releasing new version... 
+[debug] [2026-03-24T18:59:44.406Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:44.406Z] Checked if tokens are valid: true, expires at: 1774381390446
+[debug] [2026-03-24T18:59:44.406Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases versionName=projects%2F882891881661%2Fsites%2Fcampusconnect-55cca%2Fversions%2F1bdf4a1cebd7b83e
+[debug] [2026-03-24T18:59:44.406Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases {}
+[debug] [2026-03-24T18:59:45.225Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/campusconnect-55cca/channels/live/releases 200
