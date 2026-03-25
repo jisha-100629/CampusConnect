@@ -7,12 +7,12 @@ import { getMessaging, isSupported as isMessagingSupported } from "firebase/mess
 export const ALLOWED_DOMAIN = "bvrithyderabad.edu.in";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyA1mirE2AJWx5k58gCiauZ05VHf5aPg_7I",
-  authDomain: "campusconnect-55cca.firebaseapp.com",
-  projectId: "campusconnect-55cca",
-  storageBucket: "campusconnect-55cca.firebasestorage.app",
-  messagingSenderId: "882891881661",
-  appId: "1:882891881661:web:f1610cd134db1c50c54bd4",
+  apiKey: "AIzaSyA3pgg2wthj8LBa1ApxclXeVin58zEpun8",
+  authDomain: "campusconnect-dae35.firebaseapp.com",
+  projectId: "campusconnect-dae35",
+  storageBucket: "campusconnect-dae35.firebasestorage.app",
+  messagingSenderId: "615946275746",
+  appId: "1:615946275746:web:7974db4d95f7a5aa3000fb",
   measurementId: "G-97V72RBMDB",
 };
 
